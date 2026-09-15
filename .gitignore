@@ -1,0 +1,15 @@
+# 個人の写真はリポジトリに含めない
+サンプル画像/
+sample/
+*.HEIC
+*.heic
+*.JPEG
+*.jpeg
+*.JPG
+*.jpg
+# 書き出した結果
+*_developed.*
+# 依存関係・作業用
+node_modules/
+.DS_Store
+Thumbs.db

@@ -1,0 +1,821 @@
+<title>星景現像</title>
+<style>
+  :root{
+    --bg:#14161a; --panel:#1c2026; --panel2:#232830; --line:#313742;
+    --fg:#e6e9ee; --dim:#98a1b0; --accent:#6fb4ff; --warn:#ffb454; --bad:#ff6b6b; --ok:#67d98b;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+    font:13px/1.6 "Segoe UI","Hiragino Kaku Gothic ProN","Yu Gothic UI",sans-serif;
+    height:100vh;display:flex;overflow:hidden}
+
+  /* ---- 左: 画像 ---- */
+  #left{flex:1;min-width:0;display:flex;flex-direction:column}
+  #bar{flex:none;display:flex;align-items:center;gap:7px;padding:6px 10px;
+    background:var(--panel);border-bottom:1px solid var(--line)}
+  #bar .sp{flex:1}
+  #bar #dlist{max-width:150px}
+  #bar select{background:var(--panel2);color:var(--fg);border:1px solid var(--line);border-radius:5px;
+    padding:5px 6px;font-size:12px;font-family:inherit;max-width:230px}
+  #count{color:var(--dim);font-variant-numeric:tabular-nums;font-size:12px;min-width:52px}
+  #zoomLbl{color:var(--accent);font-variant-numeric:tabular-nums;min-width:56px;text-align:right}
+  #stage{flex:1;min-height:0;position:relative;background:#0b0d10;overflow:hidden}
+  #view{position:absolute;inset:0;width:100%;height:100%;display:none;cursor:grab}
+  #view.drag{cursor:grabbing}
+  #drop{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;
+    justify-content:center;gap:14px;color:var(--dim);text-align:center;padding:24px}
+  #drop.hide{display:none}
+  #drop b{color:var(--fg);font-size:17px;font-weight:600}
+  #drop.over{background:#1a2430;outline:2px dashed var(--accent);outline-offset:-12px}
+  #busy{position:absolute;inset:0;display:none;align-items:center;justify-content:center;
+    background:rgba(11,13,16,.72);font-size:14px;z-index:5}
+  #busy.on{display:flex}
+  #hint{position:absolute;left:10px;bottom:8px;color:var(--dim);font-size:11px;
+    background:rgba(11,13,16,.75);padding:3px 8px;border-radius:4px;display:none}
+
+  /* ---- 右: 操作パネル ---- */
+  #panel{width:335px;flex:none;background:var(--panel);border-left:1px solid var(--line);
+    display:flex;flex-direction:column;overflow-y:auto}
+  .sec{padding:12px 14px;border-bottom:1px solid var(--line)}
+  .sec h3{margin:0 0 9px;font-size:11px;letter-spacing:.09em;color:var(--dim);font-weight:600}
+  .row{display:flex;align-items:center;gap:8px;margin:7px 0}
+  .row label{flex:1;font-size:12px}
+  .row .val{width:56px;text-align:right;color:var(--accent);font-variant-numeric:tabular-nums;font-size:12px}
+  input[type=range]{width:100%;accent-color:var(--accent);margin:0}
+  input[type=checkbox]{accent-color:var(--accent);width:15px;height:15px}
+  .chk{display:flex;align-items:center;gap:8px;margin:8px 0 2px;cursor:pointer}
+  .chk span.eff{margin-left:auto;font-size:11px;color:var(--dim);font-variant-numeric:tabular-nums}
+  .sub{font-size:10.5px;color:var(--dim);margin:-2px 0 8px;line-height:1.45}
+  button{background:var(--panel2);color:var(--fg);border:1px solid var(--line);
+    border-radius:5px;padding:6px 10px;cursor:pointer;font-size:12px;font-family:inherit}
+  button:hover:not(:disabled){background:#2c323c;border-color:#454c59}
+  button:disabled{opacity:.4;cursor:default}
+  button.primary{background:#2a4d78;border-color:#37618f}
+  button.primary:hover:not(:disabled){background:#33598a}
+  .btns{display:flex;gap:7px;flex-wrap:wrap}
+
+  table.m{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+  table.m td{padding:2.5px 0;font-size:12px}
+  table.m td:first-child{color:var(--dim)}
+  table.m td:last-child{text-align:right;font-weight:600}
+  .tag{display:inline-block;padding:1px 6px;border-radius:3px;font-size:10px;margin-left:5px;
+    background:var(--panel2);color:var(--dim);font-weight:400}
+  .good{color:var(--ok)} .mid{color:var(--warn)} .bad{color:var(--bad)}
+  #note{font-size:11px;color:var(--warn);margin-top:7px;line-height:1.5}
+  #fname{font-size:11px;color:var(--dim);word-break:break-all}
+  .inert{opacity:.35}
+  .inert input{pointer-events:none}
+  #verdict.bad{color:var(--bad)} #verdict.mid{color:var(--warn)} #verdict.good{color:var(--ok)}
+</style>
+
+<div id="left">
+  <div id="bar">
+    <button id="openDir" title="フォルダ内の画像をまとめて開きます">フォルダ</button>
+    <select id="dlist" disabled title="フォルダを切り替え"></select>
+    <button id="prev" disabled title="← キー">◀</button>
+    <select id="flist" disabled></select>
+    <button id="next" disabled title="→ キー">▶</button>
+    <span id="count"></span>
+    <span class="sp"></span>
+    <button id="zFit">全体</button>
+    <button id="z100">100%</button>
+    <button id="zIn">＋</button>
+    <button id="zOut">－</button>
+    <span id="zoomLbl">-</span>
+  </div>
+  <div id="stage">
+    <canvas id="view"></canvas>
+    <div id="drop">
+      <b>星景写真をドロップ</b>
+      <div>HEIC / JPEG / PNG<br>フォルダごと放り込めます<br>クリックでファイル選択</div>
+    </div>
+    <div id="busy">処理中…</div>
+    <div id="hint">スペースキーを押している間は元画像</div>
+  </div>
+</div>
+
+<div id="panel">
+  <div class="sec">
+    <h3>画像</h3>
+    <div id="fname">未読み込み</div>
+  </div>
+
+  <div class="sec">
+    <h3>撮影情報</h3>
+    <table class="m" id="exifTable"><tr><td>読み込み待ち</td><td></td></tr></table>
+    <div id="verdict" class="sub" style="margin-top:8px"></div>
+  </div>
+
+  <div class="sec">
+    <h3>自動調整</h3>
+    <div class="sub">画像を測って決めた値です。ここから微調整してください。</div>
+    <div class="btns">
+      <button id="auto">自動に戻す</button>
+      <button id="reana" title="カブリの次数を変えたときに押してください">再解析</button>
+    </div>
+    <div id="note"></div>
+  </div>
+
+  <div class="sec">
+    <h3>明るさと黒</h3>
+    <div class="row"><label>ノイズ許容量</label><span class="val" id="vNoise"></span></div>
+    <input type="range" id="sNoise" min="3" max="30" step="0.5">
+    <div class="sub">これを超えないところまで自動でストレッチを弱めます</div>
+
+    <div class="row"><label>背景の明るさ</label><span class="val" id="vBg"></span></div>
+    <input type="range" id="sBg" min="0.02" max="0.30" step="0.005">
+    <div class="sub">小さいほど黒が黒くなります（ノイズ許容量が上限）</div>
+
+    <div class="row"><label>黒の粘り</label><span class="val" id="vShadow"></span></div>
+    <input type="range" id="sShadow" min="0.5" max="4.5" step="0.1">
+    <div class="sub">大きいほど暗部を潰しません</div>
+  </div>
+
+  <div class="sec">
+    <h3>色の補正</h3>
+    <!-- 中間値が最良になる画像が1枚も無く、潰れた画像では内部の上限が先に
+         効いてスライダーが無反応だったため、連続値をやめて on/off にした。 -->
+    <label class="chk"><input type="checkbox" id="cNeu" checked>色かぶりを補正<span class="eff" id="effNeu"></span></label>
+    <label class="chk"><input type="checkbox" id="cRad" checked>周辺の色転びを補正<span class="eff" id="effRad"></span></label>
+    <div class="sub">強さは好みではなく測定値で決まります。背景の色を測れない画像では右側の実効値が自動で下がります。</div>
+  </div>
+
+  <div class="sec">
+    <h3>仕上げ</h3>
+    <div class="row"><label>彩度</label><span class="val" id="vSat"></span></div>
+    <input type="range" id="sSat" min="1" max="2" step="0.05">
+    <div class="row"><label>カラーノイズ除去</label><span class="val" id="vChroma"></span></div>
+    <input type="range" id="sChroma" min="0" max="3" step="1">
+    <div class="sub">操作中は切っています（仕上げ表示と書き出しには反映）</div>
+  </div>
+
+  <div class="sec">
+    <h3>カブリの推定</h3>
+    <div class="row"><label>次数</label><span class="val" id="vDeg"></span></div>
+    <input type="range" id="sDeg" min="0" max="3" step="1">
+    <div class="sub">0=一定 / 1=平面 / 2=お椀 / 3=複雑。上げると天の川まで消すことがあります。変更後は再解析。</div>
+  </div>
+
+  <div class="sec">
+    <h3>測定値</h3>
+    <table class="m">
+      <tr><td>背景レベル</td><td id="mBg">-</td></tr>
+      <tr><td>色かぶり</td><td id="mCast">-</td></tr>
+      <tr><td>周辺色ムラ</td><td id="mCorner">-</td></tr>
+      <tr><td>背景ノイズ</td><td id="mNoise">-</td></tr>
+      <tr><td>黒潰れ</td><td id="mClip">-</td></tr>
+      <tr><td>星の太さ</td><td id="mFwhm">-</td></tr>
+      <tr><td>星の伸び</td><td id="mEcc">-</td></tr>
+      <tr><td>検出星数</td><td id="mStars">-</td></tr>
+    </table>
+    <div class="sub" style="margin-top:7px">星の太さは過処理（肥大・ぼけ）を捉えます。検出星数は閾値がノイズに依存するため、同じ画像内での比較にのみ使えます。</div>
+  </div>
+
+  <div class="sec">
+    <h3>解析結果</h3>
+    <table class="m">
+      <tr><td>実際のストレッチ量</td><td id="iUsed">-</td></tr>
+      <tr><td>色の測定信頼度</td><td id="iConf">-</td></tr>
+      <tr><td>入力の黒潰れ</td><td id="iBlack">-</td></tr>
+      <tr><td>除外した前景セル</td><td id="iDrop">-</td></tr>
+    </table>
+  </div>
+
+  <div class="sec">
+    <h3>書き出し</h3>
+    <div class="btns">
+      <button id="expPng" class="primary" disabled>PNG（原寸）</button>
+      <button id="expJpg" disabled>JPEG（原寸）</button>
+    </div>
+    <div class="sub" id="expNote">原寸で処理し直すため数秒かかります</div>
+  </div>
+</div>
+
+<input type="file" id="picker" accept=".heic,.HEIC,.heif,image/*" multiple style="display:none">
+<input type="file" id="dirpicker" webkitdirectory directory style="display:none">
+
+<script src="heic.js"></script>
+<script src="develop.js"></script>
+<script src="metrics.js"></script>
+<script src="exif.js"></script>
+<script>
+(function () {
+  'use strict';
+
+  /* 操作中に処理する解像度。画面はこれ以上表示できないので、
+     ここを上げても見た目は良くならず遅くなるだけ。
+     100% 以上に拡大したときだけ、別途フル解像度を1回だけ作る。 */
+  var PREVIEW_MAX = 1500;
+
+  var $ = function (id) { return document.getElementById(id); };
+  var view = $('view'), vctx = view.getContext('2d');
+  var stage = $('stage');
+
+  var full = null;        // 原寸 {data,width,height}
+  var model = null;       // 操作用モデル(プレビュー解像度)
+  var srcPreview = null;  // プレビュー解像度の元画像(比較用)
+  var pvCanvas = document.createElement('canvas');   // 現像結果(プレビュー解像度)
+  var fullCanvas = null;                             // 現像結果(原寸・拡大時のみ生成)
+  var fullDirty = true;
+  var fileName = '';
+  var rafPending = false, idleTimer = null;
+  var lastDragMs = null, lastFinalMs = null;
+  var comparing = false;
+  var curExif = null;
+
+  /* 表示状態。座標はすべて「原寸画像の画素」で持つ。 */
+  var vw = { zoom: 1, fit: 1, cx: 0, cy: 0, fitMode: true };
+
+  var CTRL = [
+    { s: 'sNoise',  v: 'vNoise',  key: 'noiseBudget',  fmt: function (x) { return x.toFixed(1); } },
+    { s: 'sBg',     v: 'vBg',     key: 'targetBg',     fmt: function (x) { return x.toFixed(3); } },
+    { s: 'sShadow', v: 'vShadow', key: 'shadowK',      fmt: function (x) { return x.toFixed(1); } },
+    { s: 'sSat',    v: 'vSat',    key: 'saturation',   fmt: function (x) { return x.toFixed(2); } },
+    { s: 'sChroma', v: 'vChroma', key: 'chromaSmooth', fmt: function (x) { return x ? x + ' px' : 'なし'; } },
+    { s: 'sDeg',    v: 'vDeg',    key: 'polyDegree',   fmt: function (x) { return String(x); } }
+  ];
+
+  function params() {
+    var p = {};
+    CTRL.forEach(function (c) { p[c.key] = parseFloat($(c.s).value); });
+    p.neutralize = $('cNeu').checked ? 1 : 0;
+    p.radialColor = $('cRad').checked ? 1 : 0;
+    return p;
+  }
+  function setParams(p) {
+    CTRL.forEach(function (c) {
+      if (p[c.key] !== undefined) $(c.s).value = p[c.key];
+      $(c.v).textContent = c.fmt(parseFloat($(c.s).value));
+    });
+    if (p.neutralize !== undefined) $('cNeu').checked = p.neutralize > 0;
+    if (p.radialColor !== undefined) $('cRad').checked = p.radialColor > 0;
+  }
+
+  /* 解析結果から出発点を決める。AI ではなく測った値から算出している。 */
+  function autoParams(M) {
+    var clipped = M.blackRatio > 0.12;
+    return {
+      noiseBudget: 12, targetBg: 0.10, shadowK: 2.2,
+      neutralize: 1, radialColor: 1,
+      saturation: clipped ? 1.15 : 1.30,   // 潰れた画像は色ノイズが出やすい
+      chromaSmooth: clipped ? 2 : 1,
+      polyDegree: 1
+    };
+  }
+
+  function showExif(exif) {
+    var t = $('exifTable'), f = StarExif.format(exif);
+    if (!f) { t.innerHTML = '<tr><td>撮影情報がありません</td><td></td></tr>'; return; }
+    t.innerHTML = Object.keys(f).map(function (k) {
+      return '<tr><td>' + k + '</td><td>' + String(f[k]).replace(/</g, '&lt;') + '</td></tr>';
+    }).join('');
+  }
+
+  function busy(on, msg) {
+    $('busy').textContent = msg || '処理中…';
+    $('busy').classList.toggle('on', !!on);
+  }
+
+  /* ---------- 表示 (拡大・縮小・移動) ---------- */
+  function fitZoom() {
+    if (!full) return 1;
+    return Math.min(stage.clientWidth / full.width, stage.clientHeight / full.height);
+  }
+  function clampView() {
+    if (!full) return;
+    var minZ = fitZoom() * 0.5, maxZ = 8;
+    vw.zoom = Math.max(minZ, Math.min(maxZ, vw.zoom));
+    var halfW = stage.clientWidth / vw.zoom / 2, halfH = stage.clientHeight / vw.zoom / 2;
+    if (halfW * 2 >= full.width) vw.cx = full.width / 2;
+    else vw.cx = Math.max(halfW, Math.min(full.width - halfW, vw.cx));
+    if (halfH * 2 >= full.height) vw.cy = full.height / 2;
+    else vw.cy = Math.max(halfH, Math.min(full.height - halfH, vw.cy));
+  }
+
+  function draw() {
+    if (!full) return;
+    var W = stage.clientWidth, H = stage.clientHeight;
+    if (view.width !== W || view.height !== H) { view.width = W; view.height = H; }
+    clampView();
+
+    /* プレビューの解像度を超えて拡大するなら、原寸の描画結果を使う。
+       画面が出せる以上の画素を作っても意味がないが、拡大時は話が別で、
+       ここで手を抜くと星の確認ができない。 */
+    var ps = pvCanvas.width / full.width;
+    var src = pvCanvas, srcScale = ps;
+    if (vw.zoom > ps * 1.05) {
+      if (fullCanvas && !fullDirty) { src = fullCanvas; srcScale = 1; }
+      else scheduleFullRender();
+    }
+
+    var sw = W / vw.zoom, sh = H / vw.zoom;
+    var sx = (vw.cx - sw / 2) * srcScale, sy = (vw.cy - sh / 2) * srcScale;
+    vctx.fillStyle = '#0b0d10'; vctx.fillRect(0, 0, W, H);
+    vctx.imageSmoothingEnabled = vw.zoom < srcScale * 1.5;
+    vctx.drawImage(src, sx, sy, sw * srcScale, sh * srcScale, 0, 0, W, H);
+
+    var pct = (vw.zoom * 100);
+    $('zoomLbl').textContent = (pct < 100 ? pct.toFixed(0) : pct.toFixed(0)) + '%' +
+      (src === fullCanvas ? '' : (vw.zoom > ps * 1.05 ? ' (粗)' : ''));
+  }
+
+  var fullTimer = null;
+  function scheduleFullRender() {
+    clearTimeout(fullTimer);
+    fullTimer = setTimeout(function () {
+      if (!full || !fullDirty) return;
+      busy(true, '原寸を生成中…');
+      setTimeout(function () {
+        try {
+          var p = params();
+          var M = StarDevelop.analyze(full.data, full.width, full.height, p);
+          var out = StarDevelop.apply(M, p, {});
+          if (!fullCanvas) fullCanvas = document.createElement('canvas');
+          fullCanvas.width = full.width; fullCanvas.height = full.height;
+          fullCanvas.getContext('2d').putImageData(new ImageData(out, full.width, full.height), 0, 0);
+          fullDirty = false;
+        } catch (e) { console.warn('full render failed', e); }
+        busy(false); draw();
+      }, 16);
+    }, 400);
+  }
+
+  function zoomAt(clientX, clientY, factor) {
+    if (!full) return;
+    var r = stage.getBoundingClientRect();
+    var px = clientX - r.left, py = clientY - r.top;
+    // カーソル位置の画像座標を固定したまま拡大する
+    var ox = vw.cx + (px - r.width / 2) / vw.zoom;
+    var oy = vw.cy + (py - r.height / 2) / vw.zoom;
+    vw.zoom = Math.max(fitZoom() * 0.5, Math.min(8, vw.zoom * factor));
+    vw.fitMode = false;
+    // 拡大後も同じ画像座標がカーソルの下に来るように中心を決め直す
+    vw.cx = ox - (px - r.width / 2) / vw.zoom;
+    vw.cy = oy - (py - r.height / 2) / vw.zoom;
+    draw();
+  }
+
+  stage.addEventListener('wheel', function (e) {
+    if (!full) return;
+    e.preventDefault();
+    zoomAt(e.clientX, e.clientY, e.deltaY < 0 ? 1.15 : 1 / 1.15);
+  }, { passive: false });
+
+  var panning = false, panX = 0, panY = 0;
+  view.addEventListener('pointerdown', function (e) {
+    if (!full) return;
+    panning = true; panX = e.clientX; panY = e.clientY;
+    view.classList.add('drag'); view.setPointerCapture(e.pointerId);
+  });
+  view.addEventListener('pointermove', function (e) {
+    if (!panning) return;
+    vw.cx -= (e.clientX - panX) / vw.zoom;
+    vw.cy -= (e.clientY - panY) / vw.zoom;
+    panX = e.clientX; panY = e.clientY; vw.fitMode = false;
+    draw();
+  });
+  ['pointerup', 'pointercancel'].forEach(function (ev) {
+    view.addEventListener(ev, function () { panning = false; view.classList.remove('drag'); });
+  });
+
+  $('zFit').addEventListener('click', function () {
+    if (!full) return;
+    vw.fitMode = true; vw.zoom = fitZoom(); vw.cx = full.width / 2; vw.cy = full.height / 2; draw();
+  });
+  $('z100').addEventListener('click', function () { if (full) { vw.fitMode = false; vw.zoom = 1; draw(); } });
+  $('zIn').addEventListener('click', function () {
+    var r = stage.getBoundingClientRect(); zoomAt(r.left + r.width / 2, r.top + r.height / 2, 1.4);
+  });
+  $('zOut').addEventListener('click', function () {
+    var r = stage.getBoundingClientRect(); zoomAt(r.left + r.width / 2, r.top + r.height / 2, 1 / 1.4);
+  });
+  window.addEventListener('resize', function () {
+    if (!full) return;
+    if (vw.fitMode) vw.zoom = fitZoom();
+    draw();
+  });
+
+  /* ---------- 読み込み ---------- */
+  function decodeHeic(buf) {
+    var LH = (typeof libheif === 'function') ? libheif() : libheif;
+    var imgs = new LH.HeifDecoder().decode(new Uint8Array(buf));
+    if (!imgs || !imgs.length) throw new Error('HEICを読めませんでした');
+    var im = imgs[0], w = im.get_width(), h = im.get_height();
+    var id = document.createElement('canvas').getContext('2d').createImageData(w, h);
+    return new Promise(function (res, rej) {
+      im.display(id, function (d) { d ? res({ data: d.data, width: w, height: h }) : rej(new Error('HEICの展開に失敗')); });
+    });
+  }
+  function decodeOther(file) {
+    return new Promise(function (res, rej) {
+      var url = URL.createObjectURL(file), img = new Image();
+      img.onload = function () {
+        var c = document.createElement('canvas');
+        c.width = img.naturalWidth; c.height = img.naturalHeight;
+        var x = c.getContext('2d'); x.drawImage(img, 0, 0);
+        URL.revokeObjectURL(url);
+        res({ data: x.getImageData(0, 0, c.width, c.height).data, width: c.width, height: c.height });
+      };
+      img.onerror = function () { URL.revokeObjectURL(url); rej(new Error('画像を読めませんでした')); };
+      img.src = url;
+    });
+  }
+  /* 縮小は Canvas に任せる。自前ループより桁違いに速い。 */
+  function shrink(src, maxDim) {
+    var sc = Math.min(1, maxDim / Math.max(src.width, src.height));
+    var w = Math.max(1, Math.round(src.width * sc)), h = Math.max(1, Math.round(src.height * sc));
+    var a = document.createElement('canvas'); a.width = src.width; a.height = src.height;
+    a.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(src.data), src.width, src.height), 0, 0);
+    var b = document.createElement('canvas'); b.width = w; b.height = h;
+    var bx = b.getContext('2d', { willReadFrequently: true });
+    bx.imageSmoothingEnabled = true; bx.imageSmoothingQuality = 'high';
+    bx.drawImage(a, 0, 0, w, h);
+    return { data: bx.getImageData(0, 0, w, h).data, width: w, height: h };
+  }
+
+  /* ---------- 画像リストと切り替え ---------- */
+  var IMG_RE = /\.(heic|heif|jpe?g|png|webp|bmp)$/i;
+  var fileList = [], fileIdx = -1;
+  var paramStore = {};   // ファイル名 -> 調整値。戻ってきたときに自分の調整が残るように
+  var decCache = {};     // ファイル名 -> デコード済み画像(先読み用)
+  var CACHE_MAX = 3;     // 原寸1枚で約50MB なので持ちすぎない
+  var loadToken = 0;
+
+  function decodeFile(file) {
+    if (decCache[file.name]) return Promise.resolve(decCache[file.name]);
+    var isHeic = /.(heic|heif)$/i.test(file.name);
+    // EXIF を読むため、どの形式でも一度は生のバイト列を通す
+    return file.arrayBuffer().then(function (buf) {
+      var exif = StarExif.parse(buf);
+      var p = isHeic ? decodeHeic(buf) : decodeOther(new Blob([buf]));
+      return p.then(function (img) { img.exif = exif; putCache(file.name, img); return img; });
+    });
+  }
+
+  /* 撮影情報から「これは星空の写真か」を判断する。
+     画素の解析より EXIF の方が確実で、露出 1/15 秒のインカメラ撮影に
+     星が写るはずがない、という判定に画素を見る必要はない。 */
+  function judge(exif, info) {
+    if (!exif) return null;
+    var t = exif.ExposureTime, lens = String(exif.LensModel || '');
+    var sec = function (x) { return x >= 1 ? x + ' 秒' : '1/' + Math.round(1 / x) + ' 秒'; };
+    if (/front/i.test(lens)) return { cls: 'bad', msg: 'インカメラで撮影されています。星空の写真ではない可能性が高いです。' };
+    if (t != null && t < 0.5) return { cls: 'bad', msg: '露出 ' + sec(t) + ' は星を写すには短すぎます。' };
+    if (info && info.noData) return { cls: 'bad', msg: '画面の大半が黒つぶれしており、復元できる情報がありません。' };
+    if (t != null && t < 2) return { cls: 'mid', msg: '露出 ' + sec(t) + '。短いので引き出せる階調が限られます（10秒前後だと安定します）。' };
+    if (exif.ISO && exif.ISO >= 10000) return { cls: 'mid', msg: 'ISO ' + exif.ISO + ' と高感度です。ノイズが多く補正の効きが鈍くなります。' };
+    return { cls: 'good', msg: '星空の写真として処理できる条件です。' };
+  }
+  function putCache(name, img) {
+    decCache[name] = img;
+    var keys = Object.keys(decCache);
+    while (keys.length > CACHE_MAX) {
+      var far = null, fd = -1;                 // 現在地から一番遠いものを捨てる
+      keys.forEach(function (k) {
+        if (k === name) return;
+        var idx = -1;
+        for (var i = 0; i < fileList.length; i++) if (fileList[i].name === k) { idx = i; break; }
+        var d = idx < 0 ? 1e9 : Math.abs(idx - fileIdx);
+        if (d > fd) { fd = d; far = k; }
+      });
+      if (!far) break;
+      delete decCache[far];
+      keys = Object.keys(decCache);
+    }
+  }
+
+  /* 読み込んだものすべて。フォルダの選択で fileList を絞り込む。 */
+  var allFiles = [];
+
+  function dirOf(f) {
+    if (f._dir !== undefined) return f._dir;
+    var rel = f.webkitRelativePath || '';
+    var cut = rel.lastIndexOf('/');
+    return cut > 0 ? rel.slice(0, cut) : '';
+  }
+
+  function setList(files) {
+    allFiles = files.filter(function (f) { return IMG_RE.test(f.name); });
+    if (!allFiles.length) { alert('画像ファイルが見つかりませんでした'); return; }
+    decCache = {}; paramStore = {};
+
+    // フォルダごとにまとめる。サブフォルダを含めて放り込んだ場合に効く。
+    var dirs = [];
+    allFiles.forEach(function (f) {
+      var d = dirOf(f);
+      if (dirs.indexOf(d) < 0) dirs.push(d);
+    });
+    dirs.sort(function (a, b) { return a.localeCompare(b, undefined, { numeric: true }); });
+
+    var dsel = $('dlist');
+    dsel.innerHTML = '';
+    if (dirs.length > 1) {
+      var oa = document.createElement('option');
+      oa.value = '*'; oa.textContent = 'すべて (' + allFiles.length + ')';
+      dsel.appendChild(oa);
+    }
+    dirs.forEach(function (d) {
+      var n = allFiles.filter(function (f) { return dirOf(f) === d; }).length;
+      var o = document.createElement('option');
+      o.value = d;
+      o.textContent = (d === '' ? '(ルート)' : d.split('/').pop()) + ' (' + n + ')';
+      dsel.appendChild(o);
+    });
+    dsel.disabled = dirs.length < 2;
+    dsel.value = dirs.length > 1 ? '*' : dirs[0];
+    selectDir(dsel.value);
+  }
+
+  function selectDir(d) {
+    fileIdx = -1;
+    fileList = (d === '*' ? allFiles : allFiles.filter(function (f) { return dirOf(f) === d; }))
+      .sort(function (a, b) { return a.name.localeCompare(b.name, undefined, { numeric: true }); });
+    var sel = $('flist');
+    sel.innerHTML = '';
+    fileList.forEach(function (f, i) {
+      var o = document.createElement('option');
+      o.value = String(i); o.textContent = f.name; sel.appendChild(o);
+    });
+    var multi = fileList.length > 1;
+    sel.disabled = !multi; $('prev').disabled = !multi; $('next').disabled = !multi;
+    if (fileList.length) showIndex(0);
+  }
+
+  function showIndex(i) {
+    if (i < 0 || i >= fileList.length || i === fileIdx) return;
+    // 移動する前に、今の画像の調整値を覚えておく
+    if (fileIdx >= 0 && fileList[fileIdx]) paramStore[fileList[fileIdx].name] = params();
+    fileIdx = i;
+    var file = fileList[i], tok = ++loadToken;
+    $('flist').value = String(i);
+    $('count').textContent = (i + 1) + ' / ' + fileList.length;
+    busy(true, '読み込み中…');
+    decodeFile(file).then(function (img) {
+      if (tok !== loadToken) return null;     // 連打で追い越された
+      fileName = file.name;
+      curExif = img.exif || null; showExif(curExif);
+      full = img; fullCanvas = null; fullDirty = true;
+      srcPreview = shrink(img, PREVIEW_MAX);
+      $('fname').textContent = fileName + '  ' + img.width + '×' + img.height +
+        '  (操作中は ' + srcPreview.width + '×' + srcPreview.height + ' で処理)';
+      $('drop').classList.add('hide');
+      $('hint').style.display = 'block';
+      view.style.display = 'block';
+      vw.fitMode = true; vw.zoom = fitZoom(); vw.cx = img.width / 2; vw.cy = img.height / 2;
+      busy(true, '解析中…');
+      return new Promise(function (r) { setTimeout(r, 16); });
+    }).then(function () {
+      if (tok !== loadToken) return;
+      var saved = paramStore[fileName];
+      if (saved) { setParams(saved); reanalyze(false); }
+      else { setParams({ polyDegree: 1 }); reanalyze(true); }  // 画像ごとに測り直すのが既定
+      $('expPng').disabled = false; $('expJpg').disabled = false;
+      busy(false);
+      prefetch();
+    }).catch(function (e) {
+      if (tok !== loadToken) return;
+      busy(false); alert('読み込めませんでした: ' + file.name + '\n' + e.message);
+    });
+  }
+
+  /* 次の1枚を裏でデコードしておく。HEIC は1枚あたり約0.5秒かかるので、
+     これが無いと「次へ」を押すたびに毎回そこで止まる。 */
+  function prefetch() {
+    var nx = fileList[fileIdx + 1];
+    if (!nx || decCache[nx.name]) return;
+    setTimeout(function () {
+      var still = fileList[fileIdx + 1];
+      if (!still || still.name !== nx.name) return;
+      decodeFile(nx).catch(function () { });
+    }, 250);
+  }
+
+  /* ドロップされたものがフォルダなら中を読む */
+  function filesFromDrop(dt) {
+    var items = dt.items, entries = [];
+    if (items && items.length && items[0].webkitGetAsEntry) {
+      // entry はハンドラを抜けると無効になるので、ここで同期的に取り出す
+      for (var i = 0; i < items.length; i++) {
+        var en = items[i].webkitGetAsEntry();
+        if (en) entries.push(en);
+      }
+    }
+    if (!entries.length) return Promise.resolve(Array.prototype.slice.call(dt.files || []));
+    return Promise.all(entries.map(function (x) { return readEntry(x, ''); })).then(function (a) {
+      return a.reduce(function (x, y) { return x.concat(y); }, []);
+    });
+  }
+  function readEntry(en, prefix) {
+    prefix = prefix || '';
+    if (en.isFile) return new Promise(function (r) {
+      en.file(function (f) { f._dir = prefix; r([f]); }, function () { r([]); });
+    });
+    if (!en.isDirectory) return Promise.resolve([]);
+    var sub = prefix ? prefix + '/' + en.name : en.name;
+    var rd = en.createReader(), all = [];
+    return new Promise(function (res) {
+      (function more() {
+        rd.readEntries(function (ents) {
+          if (!ents.length) {
+            Promise.all(all.map(function (x) { return readEntry(x, sub); })).then(function (a) {
+              res(a.reduce(function (x, y) { return x.concat(y); }, []));
+            });
+            return;
+          }
+          all = all.concat(Array.prototype.slice.call(ents));
+          more();
+        }, function () { res([]); });
+      })();
+    });
+  }
+
+  /* ---------- 解析 ---------- */
+  function reanalyze(useAuto) {
+    if (!srcPreview) return;
+    var t = performance.now();
+    model = StarDevelop.analyze(srcPreview.data, srcPreview.width, srcPreview.height, params());
+    if (useAuto) setParams(autoParams(model));
+    fullDirty = true;
+    render(false); scheduleIdle();
+    console.log('analyze', (performance.now() - t).toFixed(0) + 'ms');
+  }
+
+  /* ---------- 適用 ---------- */
+  function render(finalQuality) {
+    if (!model) return null;
+    var p = params();
+    // 操作中はカラーノイズ処理を切る。1.7Mpx で +70ms かかり応答が落ちるため。
+    if (!finalQuality) p.chromaSmooth = 0;
+    var info = {}, t = performance.now();
+    var out = StarDevelop.apply(model, p, info);
+    var ms = performance.now() - t;
+
+    if (pvCanvas.width !== model.width || pvCanvas.height !== model.height) {
+      pvCanvas.width = model.width; pvCanvas.height = model.height;
+    }
+    pvCanvas.getContext('2d').putImageData(new ImageData(out, model.width, model.height), 0, 0);
+    if (!comparing) draw();
+
+    var conf = info.confidence;
+    $('effNeu').textContent = '実効 ' + ($('cNeu').checked ? conf.toFixed(2) : '0.00');
+    $('effRad').textContent = '実効 ' + ($('cRad').checked ? conf.toFixed(2) : '0.00');
+    $('iUsed').textContent = info.targetBgUsed.toFixed(3) +
+      (info.targetBgUsed < p.targetBg - 0.002 ? '（自動で抑制）' : '');
+    $('iConf').innerHTML = cls(conf, 0.9, 0.4, true) ;
+    $('iBlack').textContent = (info.blackRatio * 100).toFixed(1) + ' %';
+    $('iDrop').textContent = info.droppedCells + ' 個';
+
+    if (finalQuality) lastFinalMs = ms; else lastDragMs = ms;
+    $('expNote').innerHTML = (model.width * model.height / 1e6).toFixed(1) + ' Mpx &nbsp;操作中 ' +
+      (lastDragMs == null ? '-' : lastDragMs.toFixed(0) + 'ms') + ' / 仕上げ ' +
+      (lastFinalMs == null ? '-' : lastFinalMs.toFixed(0) + 'ms') +
+      '<br>原寸で処理し直すため数秒かかります';
+
+    /* スライダーが内部で上書きされているときは、動かせる見た目のまま
+       置いておくと嘘になる。無効であることを見せる。 */
+    var budgetBinds = info.targetBgUsed < p.targetBg - 0.002;
+    $('sBg').parentNode.classList.toggle('inert', !!info.noData);
+    document.querySelectorAll('#sNoise,#sBg,#sShadow').forEach(function (el) {
+      el.classList.toggle('inert', !!info.noData);
+      el.disabled = !!info.noData;
+    });
+    var v = judge(curExif, info);
+    var vd = $('verdict');
+    vd.className = 'sub ' + (v ? v.cls : '');
+    vd.textContent = v ? v.msg : '';
+
+    var n = [];
+    if (budgetBinds && !info.noData) n.push('「背景の明るさ」はノイズ許容量が上限になっています。もっと明るくするには、まずノイズ許容量を上げてください。');
+    if (conf < 0.9) n.push('背景が黒潰れの底に近く、色を正確に測れていません。色補正を自動で弱めています。');
+    if (info.subCapped) n.push('引きすぎを防ぐ上限が働いています。色かぶりが残る場合があります。');
+    if (info.noData) n.unshift('撮影時点で画面の大半が黒つぶれしており、復元できる情報がありません。素通しで表示しています。');
+    $('note').textContent = n.join(' ');
+    return out;
+  }
+  function cls(v, good, mid, hi) {
+    if (v == null) return '-';
+    var c = hi ? (v > good ? 'good' : v > mid ? 'mid' : 'bad')
+               : (v <= good ? 'good' : v <= mid ? 'mid' : 'bad');
+    return '<span class="' + c + '">' + v + '</span>';
+  }
+
+  /* 指標は全画素を走査するので、操作が止まってからまとめて出す */
+  function measureNow() {
+    if (!model) return;
+    var out = render(true);
+    if (!out) return;
+    fullDirty = true;
+    var m = StarMetrics.measure(out, model.width, model.height, true);
+    $('mBg').textContent = m.bgLevel;
+    $('mCast').innerHTML = cls(m.colorCast, 3, 10);
+    $('mCorner').innerHTML = cls(m.cornerCast, 4, 12);
+    $('mNoise').innerHTML = cls(m.noise, 12, 20);
+    $('mClip').innerHTML = cls(m.clipLow, 1, 4);
+    $('mFwhm').innerHTML = m.fwhm == null ? '<span class="bad">測定不能</span>' : cls(m.fwhm, 2.6, 3.4) + ' <span class="tag">px</span>';
+    $('mEcc').innerHTML = m.eccentricity == null ? '-' : cls(m.eccentricity, 0.10, 0.20);
+    $('mStars').innerHTML = m.stars.toLocaleString() + ' <span class="tag">' + m.starsPerMpx + '/Mpx</span>';
+  }
+
+  function scheduleIdle() { clearTimeout(idleTimer); idleTimer = setTimeout(measureNow, 260); }
+  function onInput() {
+    CTRL.forEach(function (c) { $(c.v).textContent = c.fmt(parseFloat($(c.s).value)); });
+    fullDirty = true;
+    if (!rafPending) {
+      rafPending = true;
+      requestAnimationFrame(function () { rafPending = false; render(false); });
+    }
+    scheduleIdle();
+  }
+  CTRL.forEach(function (c) { $(c.s).addEventListener('input', onInput); });
+  ['cNeu', 'cRad'].forEach(function (id) { $(id).addEventListener('change', onInput); });
+
+  $('auto').addEventListener('click', function () {
+    if (!model) return;
+    setParams(autoParams(model)); fullDirty = true; render(false); scheduleIdle();
+  });
+  $('reana').addEventListener('click', function () {
+    if (!srcPreview) return;
+    busy(true, '再解析中…');
+    setTimeout(function () { reanalyze(false); busy(false); }, 16);
+  });
+
+  /* スペースキーで元画像と見比べる */
+  window.addEventListener('keydown', function (e) {
+    if (e.code !== 'Space' || comparing || !srcPreview) return;
+    e.preventDefault(); comparing = true;
+    var c = document.createElement('canvas');
+    c.width = srcPreview.width; c.height = srcPreview.height;
+    c.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(srcPreview.data), srcPreview.width, srcPreview.height), 0, 0);
+    var keep = pvCanvas; pvCanvas = c; draw(); pvCanvas = keep;
+  });
+  window.addEventListener('keyup', function (e) {
+    if (e.code !== 'Space' || !comparing) return;
+    comparing = false; draw();
+  });
+
+  /* ---------- 書き出し ---------- */
+  function exportImage(type, ext, quality) {
+    if (!full) return;
+    busy(true, '原寸で処理中…');
+    setTimeout(function () {
+      try {
+        var p = params(), t = performance.now();
+        var M = StarDevelop.analyze(full.data, full.width, full.height, p);
+        var out = StarDevelop.apply(M, p, {});
+        if (!fullCanvas) fullCanvas = document.createElement('canvas');
+        fullCanvas.width = full.width; fullCanvas.height = full.height;
+        fullCanvas.getContext('2d').putImageData(new ImageData(out, full.width, full.height), 0, 0);
+        fullDirty = false;
+        fullCanvas.toBlob(function (blob) {
+          var a = document.createElement('a');
+          a.href = URL.createObjectURL(blob);
+          a.download = fileName.replace(/\.[^.]+$/, '') + '_developed.' + ext;
+          a.click();
+          setTimeout(function () { URL.revokeObjectURL(a.href); }, 4000);
+          busy(false); draw();
+          console.log('export', (performance.now() - t).toFixed(0) + 'ms');
+        }, type, quality);
+      } catch (e) { busy(false); alert('書き出しに失敗しました: ' + e.message); }
+    }, 16);
+  }
+  $('expPng').addEventListener('click', function () { exportImage('image/png', 'png'); });
+  $('expJpg').addEventListener('click', function () { exportImage('image/jpeg', 'jpg', 0.95); });
+
+  /* ---------- ドロップ / ファイル選択 ---------- */
+  var drop = $('drop');
+  drop.addEventListener('click', function () { $('picker').click(); });
+  $('picker').addEventListener('change', function (e) {
+    if (e.target.files.length) setList(Array.prototype.slice.call(e.target.files));
+  });
+  $('openDir').addEventListener('click', function () { $('dirpicker').click(); });
+  $('dirpicker').addEventListener('change', function (e) {
+    if (e.target.files.length) setList(Array.prototype.slice.call(e.target.files));
+  });
+  $('prev').addEventListener('click', function () { showIndex(fileIdx - 1); });
+  $('next').addEventListener('click', function () { showIndex(fileIdx + 1); });
+  $('flist').addEventListener('change', function (e) { showIndex(parseInt(e.target.value, 10)); });
+  $('dlist').addEventListener('change', function (e) { selectDir(e.target.value); });
+
+  window.addEventListener('keydown', function (e) {
+    if (fileList.length < 2) return;
+    var t = e.target.tagName;
+    if (t === 'INPUT' || t === 'SELECT' || t === 'TEXTAREA') return;
+    if (e.code === 'ArrowLeft') { e.preventDefault(); showIndex(fileIdx - 1); }
+    else if (e.code === 'ArrowRight') { e.preventDefault(); showIndex(fileIdx + 1); }
+  });
+  ['dragenter', 'dragover'].forEach(function (ev) {
+    window.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.add('over'); });
+  });
+  ['dragleave', 'drop'].forEach(function (ev) {
+    window.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.remove('over'); });
+  });
+  window.addEventListener('drop', function (e) {
+    e.preventDefault();
+    filesFromDrop(e.dataTransfer).then(function (files) {
+      if (files.length) setList(files);
+    });
+  });
+
+  setParams(autoParams({ blackRatio: 0 }));
+})();
+</script>
