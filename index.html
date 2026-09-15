@@ -63,6 +63,8 @@
   .good{color:var(--ok)} .mid{color:var(--warn)} .bad{color:var(--bad)}
   #note{font-size:11px;color:var(--warn);margin-top:7px;line-height:1.5}
   #fname{font-size:11px;color:var(--dim);word-break:break-all}
+  #hist{width:100%;height:130px;display:block;background:#0e1014;border:1px solid var(--line);
+    border-radius:5px;cursor:ew-resize;touch-action:none}
   table.m a{color:var(--accent);text-decoration:none}
   table.m a:hover{text-decoration:underline}
   .inert{opacity:.35}
@@ -125,12 +127,12 @@
     <div class="sub">これを超えないところまで自動でストレッチを弱めます</div>
 
     <div class="row"><label>背景の明るさ</label><span class="val" id="vBg"></span></div>
-    <input type="range" id="sBg" min="0.02" max="0.30" step="0.005">
-    <div class="sub">小さいほど黒が黒くなります（ノイズ許容量が上限）</div>
+    <input type="range" id="sBg" min="5" max="80" step="1">
+    <div class="sub">仕上がりの背景を 0-255 のどこに置くか。下の「背景レベル」と同じ単位です</div>
 
-    <div class="row"><label>黒の粘り</label><span class="val" id="vShadow"></span></div>
-    <input type="range" id="sShadow" min="0.5" max="4.5" step="0.1">
-    <div class="sub">大きいほど暗部を潰しません</div>
+    <div class="row"><label>黒の残し方</label><span class="val" id="vShadow"></span></div>
+    <input type="range" id="sShadow" min="-5" max="5" step="0.5">
+    <div class="sub">マイナスで締める / プラスで暗部を残す。0 が標準</div>
   </div>
 
   <div class="sec">
@@ -145,7 +147,7 @@
   <div class="sec">
     <h3>仕上げ</h3>
     <div class="row"><label>彩度</label><span class="val" id="vSat"></span></div>
-    <input type="range" id="sSat" min="1" max="2" step="0.05">
+    <input type="range" id="sSat" min="-10" max="10" step="1">
     <div class="row"><label>カラーノイズ除去</label><span class="val" id="vChroma"></span></div>
     <input type="range" id="sChroma" min="0" max="3" step="1">
     <div class="sub">操作中は切っています（仕上げ表示と書き出しには反映）</div>
@@ -156,6 +158,19 @@
     <div class="row"><label>次数</label><span class="val" id="vDeg"></span></div>
     <input type="range" id="sDeg" min="0" max="3" step="1">
     <div class="sub">0=一定 / 1=平面 / 2=お椀 / 3=複雑。上げると天の川まで消すことがあります。変更後は再解析。</div>
+  </div>
+
+  <div class="sec">
+    <h3>RGB ヒストグラム</h3>
+    <canvas id="hist" width="620" height="260"></canvas>
+    <div class="sub">横軸 = 明るさ 0-255 / 縦軸 = 出現数（対数）。
+    下の ▲ を左右にドラッグすると、そのチャンネルだけ動きます。
+    <b>赤の山を緑の山に重ねると色かぶりが消えます。</b></div>
+    <div class="btns">
+      <button id="histAuto">山を揃える</button>
+      <button id="histReset">ずらしを戻す</button>
+    </div>
+    <div class="sub" id="histVal" style="margin-top:7px"></div>
   </div>
 
   <div class="sec">
@@ -232,40 +247,64 @@
   /* 表示状態。座標はすべて「原寸画像の画素」で持つ。 */
   var vw = { zoom: 1, fit: 1, cx: 0, cy: 0, fitMode: true };
 
+  /* スライダーの表示値と内部値は単位が違う。
+     見える単位があるものは絶対値(0-255)、好みの調整は 0 を中心にした +- にした。
+     内部値をそのまま出すと「背景の明るさ 0.100」のように意味が読めない。 */
+  var satBase = 1.30;          // 彩度の 0 点。画像ごとに自動で決まる
   var CTRL = [
-    { s: 'sNoise',  v: 'vNoise',  key: 'noiseBudget',  fmt: function (x) { return x.toFixed(1); } },
-    { s: 'sBg',     v: 'vBg',     key: 'targetBg',     fmt: function (x) { return x.toFixed(3); } },
-    { s: 'sShadow', v: 'vShadow', key: 'shadowK',      fmt: function (x) { return x.toFixed(1); } },
-    { s: 'sSat',    v: 'vSat',    key: 'saturation',   fmt: function (x) { return x.toFixed(2); } },
-    { s: 'sChroma', v: 'vChroma', key: 'chromaSmooth', fmt: function (x) { return x ? x + ' px' : 'なし'; } },
-    { s: 'sDeg',    v: 'vDeg',    key: 'polyDegree',   fmt: function (x) { return String(x); } }
+    { s: 'sNoise',  v: 'vNoise',  key: 'noiseBudget',
+      toP: function (x) { return x; }, fromP: function (p) { return p; },
+      fmt: function (x) { return x.toFixed(1); } },
+    { s: 'sBg',     v: 'vBg',     key: 'targetBg',
+      toP: function (x) { return x / 255; }, fromP: function (p) { return Math.round(p * 255); },
+      fmt: function (x) { return String(x); } },
+    { s: 'sShadow', v: 'vShadow', key: 'shadowK',
+      toP: function (x) { return 2.2 + x * 0.35; }, fromP: function (p) { return Math.round((p - 2.2) / 0.35 * 2) / 2; },
+      fmt: function (x) { return (x > 0 ? '+' : '') + x; } },
+    { s: 'sSat',    v: 'vSat',    key: 'saturation',
+      toP: function (x) { return satBase + x * 0.05; }, fromP: function (p) { return Math.round((p - satBase) / 0.05); },
+      fmt: function (x) { return (x > 0 ? '+' : '') + x + '（' + (satBase + x * 0.05).toFixed(2) + '）'; } },
+    { s: 'sChroma', v: 'vChroma', key: 'chromaSmooth',
+      toP: function (x) { return x; }, fromP: function (p) { return p; },
+      fmt: function (x) { return x ? x + ' px' : 'なし'; } },
+    { s: 'sDeg',    v: 'vDeg',    key: 'polyDegree',
+      toP: function (x) { return x; }, fromP: function (p) { return p; },
+      fmt: function (x) { return String(x); } }
   ];
+
+  var levels = { levelR: 0, levelG: 0, levelB: 0 };   // ヒストグラムから直接動かす分
 
   function params() {
     var p = {};
-    CTRL.forEach(function (c) { p[c.key] = parseFloat($(c.s).value); });
+    CTRL.forEach(function (c) { p[c.key] = c.toP(parseFloat($(c.s).value)); });
     p.neutralize = $('cNeu').checked ? 1 : 0;
     p.radialColor = $('cRad').checked ? 1 : 0;
+    p.levelR = levels.levelR; p.levelG = levels.levelG; p.levelB = levels.levelB;
     return p;
   }
   function setParams(p) {
     CTRL.forEach(function (c) {
-      if (p[c.key] !== undefined) $(c.s).value = p[c.key];
+      if (p[c.key] !== undefined) $(c.s).value = c.fromP(p[c.key]);
       $(c.v).textContent = c.fmt(parseFloat($(c.s).value));
     });
     if (p.neutralize !== undefined) $('cNeu').checked = p.neutralize > 0;
     if (p.radialColor !== undefined) $('cRad').checked = p.radialColor > 0;
+    if (p.levelR !== undefined) levels.levelR = p.levelR;
+    if (p.levelG !== undefined) levels.levelG = p.levelG;
+    if (p.levelB !== undefined) levels.levelB = p.levelB;
   }
 
   /* 解析結果から出発点を決める。AI ではなく測った値から算出している。 */
   function autoParams(M) {
     var clipped = M.blackRatio > 0.12;
+    satBase = clipped ? 1.15 : 1.30;     // 潰れた画像は色ノイズが出やすいので控えめ
     return {
       noiseBudget: 12, targetBg: 0.10, shadowK: 2.2,
       neutralize: 1, radialColor: 1,
-      saturation: clipped ? 1.15 : 1.30,   // 潰れた画像は色ノイズが出やすい
+      saturation: satBase,
       chromaSmooth: clipped ? 2 : 1,
-      polyDegree: 1
+      polyDegree: 1,
+      levelR: 0, levelG: 0, levelB: 0
     };
   }
 
@@ -707,6 +746,8 @@
     vd.className = 'sub ' + (v ? v.cls : '');
     vd.textContent = v ? v.msg : '';
 
+    if (!comparing) { computeHist(out, model.width, model.height); drawHist(); }
+
     var n = [];
     if (budgetBinds && !info.noData) n.push('「背景の明るさ」はノイズ許容量が上限になっています。もっと明るくするには、まずノイズ許容量を上げてください。');
     if (conf < 0.9) n.push('背景が黒潰れの底に近く、色を正確に測れていません。色補正を自動で弱めています。');
@@ -721,6 +762,106 @@
                : (v <= good ? 'good' : v <= mid ? 'mid' : 'bad');
     return '<span class="' + c + '">' + v + '</span>';
   }
+
+  /* ---------- RGB ヒストグラム ----------
+     現像は R/G/B を別々に処理しているので、その結果を直接見せて
+     直接動かせるようにする。背景の山の位置がチャンネルごとにずれている
+     状態が「色かぶり」そのものなので、山を重ねれば手で補正できる。 */
+  var HB = 256;
+  var hist = [new Float32Array(HB), new Float32Array(HB), new Float32Array(HB)];
+  var chMed = [0, 0, 0], histMax = 1;
+
+  function computeHist(out, w, h) {
+    for (var c = 0; c < 3; c++) hist[c].fill(0);
+    var n = w * h, step = Math.max(1, Math.floor(n / 400000)), cnt = 0;
+    for (var i = 0; i < n; i += step) {
+      var q = i * 4;
+      hist[0][out[q]]++; hist[1][out[q + 1]]++; hist[2][out[q + 2]]++; cnt++;
+    }
+    histMax = 1;
+    for (var c2 = 0; c2 < 3; c2++) {
+      var acc = 0, half = cnt / 2, m = 0, done = false;
+      for (var k = 0; k < HB; k++) {
+        if (hist[c2][k] > histMax) histMax = hist[c2][k];
+        if (!done) { acc += hist[c2][k]; if (acc >= half) { m = k; done = true; } }
+      }
+      chMed[c2] = m;
+    }
+  }
+
+  var COLS = ["#ff5a5a", "#5ade7a", "#5aa8ff"];
+  function drawHist() {
+    var cv2 = $("hist"), x2 = cv2.getContext("2d");
+    var W = cv2.width, H = cv2.height, PAD = 26;          // 下に ▲ の帯
+     var GH = H - PAD;
+    x2.clearRect(0, 0, W, H);
+    var lg = Math.log(1 + histMax);
+    x2.globalCompositeOperation = "lighter";
+    for (var c = 0; c < 3; c++) {
+      x2.beginPath(); x2.moveTo(0, GH);
+      for (var k = 0; k < HB; k++) {
+        var v = Math.log(1 + hist[c][k]) / lg;
+        x2.lineTo(k / (HB - 1) * W, GH - v * (GH - 4));
+      }
+      x2.lineTo(W, GH); x2.closePath();
+      x2.fillStyle = COLS[c] + "55"; x2.fill();
+      x2.strokeStyle = COLS[c] + "cc"; x2.lineWidth = 2; x2.stroke();
+    }
+    x2.globalCompositeOperation = "source-over";
+    for (var c3 = 0; c3 < 3; c3++) {
+      var px = chMed[c3] / (HB - 1) * W;
+      x2.beginPath();
+      x2.moveTo(px, GH + 3); x2.lineTo(px - 8, GH + 19); x2.lineTo(px + 8, GH + 19);
+      x2.closePath(); x2.fillStyle = COLS[c3]; x2.fill();
+    }
+    $("histVal").innerHTML = "背景の山: " +
+      ['R', 'G', 'B'].map(function (nm, i) {
+        return '<span style="color:' + COLS[i] + '">' + nm + ' ' + chMed[i] + '</span>';
+      }).join(" / ") +
+      "　ずらし: " + [levels.levelR, levels.levelG, levels.levelB]
+        .map(function (v) { return (v > 0 ? "+" : "") + Math.round(v); }).join(" / ");
+  }
+
+  var dragCh = -1;
+  function histX(e) {
+    var r = $("hist").getBoundingClientRect();
+    return Math.max(0, Math.min(255, Math.round((e.clientX - r.left) / r.width * 255)));
+  }
+  $("hist").addEventListener("pointerdown", function (e) {
+    if (!model) return;
+    var x = histX(e), best = -1, bd = 1e9;
+    for (var c = 0; c < 3; c++) {
+      var d = Math.abs(chMed[c] - x);
+      if (d < bd) { bd = d; best = c; }
+    }
+    if (bd > 24) return;
+    dragCh = best; $("hist").setPointerCapture(e.pointerId); e.preventDefault();
+  });
+  $("hist").addEventListener("pointermove", function (e) {
+    if (dragCh < 0) return;
+    var key = ["levelR", "levelG", "levelB"][dragCh];
+    levels[key] += histX(e) - chMed[dragCh];
+    if (levels[key] > 120) levels[key] = 120;
+    if (levels[key] < -120) levels[key] = -120;
+    render(false); scheduleIdle();
+  });
+  ["pointerup", "pointercancel"].forEach(function (ev) {
+    $("hist").addEventListener(ev, function () { dragCh = -1; });
+  });
+
+  /* 山を揃える = 3チャンネルの背景を同じ位置に持ってくる */
+  $("histAuto").addEventListener("click", function () {
+    if (!model) return;
+    var t = Math.min(chMed[0], chMed[1], chMed[2]);
+    levels.levelR += t - chMed[0];
+    levels.levelG += t - chMed[1];
+    levels.levelB += t - chMed[2];
+    render(false); scheduleIdle();
+  });
+  $("histReset").addEventListener("click", function () {
+    levels.levelR = levels.levelG = levels.levelB = 0;
+    render(false); scheduleIdle();
+  });
 
   /* 指標は全画素を走査するので、操作が止まってからまとめて出す */
   function measureNow() {

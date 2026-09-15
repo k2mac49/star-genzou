@@ -51,7 +51,12 @@
     rbfSmooth:    0.02,  // RBF の平滑化。大きいほど滑らか
     rbfCenters:   180,   // RBF の中心点数。多いほど柔軟だが天の川を消しやすい
     blackDataFloor: 0.40, // 入力画素のこの割合以上が黒潰れなら、復元対象の情報が無いと判断して素通しする
-    exposure:     1.00   // 全体の明るさ微調整
+    exposure:     1.00,  // 全体の明るさ微調整
+    /* 出力段でのチャンネル別オフセット(0-255)。ヒストグラムを直接つまんで
+       動かすための口。色かぶりの手動補正はここで行う。 */
+    levelR:       0,
+    levelG:       0,
+    levelB:       0
   };
 
   /* ---------- sRGB 変換テーブル ---------- */
@@ -771,7 +776,9 @@
     }
   }
 
-  /* ---------- 適用: スライダーを動かすたび ---------- */
+  /* ---------- 適用: スライダーを動かすたび ----------
+     注意: 戻り値のバッファは呼び出しごとに使い回される。スライダー操作で
+     毎回確保すると GC で揺れるため。結果を取っておきたい場合は複製すること。 */
   function apply(M, params, outInfo) {
     var P = mergeParams(params);
     if (M.lowConfidence) { P.neutralize = 0; P.radialColor = 0; }
@@ -978,6 +985,7 @@
     if (P.chromaSmooth > 0) smoothChroma(w2, width, height, Math.round(P.chromaSmooth));
 
     var out = M.out, sat = P.saturation;
+    var lvR = P.levelR || 0, lvG = P.levelG || 0, lvB = P.levelB || 0;
     for (var i6 = 0; i6 < n; i6++) {
       var b4 = i6 * 3, q2 = i6 * 4;
       var r = w2[b4], g = w2[b4 + 1], bl = w2[b4 + 2];
@@ -985,7 +993,8 @@
         var L = 0.2126 * r + 0.7152 * g + 0.0722 * bl;
         r = L + (r - L) * sat; g = L + (g - L) * sat; bl = L + (bl - L) * sat;
       }
-      out[q2] = r * 255; out[q2 + 1] = g * 255; out[q2 + 2] = bl * 255; out[q2 + 3] = 255;
+      out[q2] = r * 255 + lvR; out[q2 + 1] = g * 255 + lvG; out[q2 + 2] = bl * 255 + lvB;
+      out[q2 + 3] = 255;
     }
     if (outInfo) for (var ik in info) outInfo[ik] = info[ik];
     return out;
