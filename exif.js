@@ -19,7 +19,13 @@
     0x829A: 'ExposureTime', 0x829D: 'FNumber', 0x8827: 'ISO',
     0x9003: 'DateTimeOriginal', 0x9004: 'DateTimeDigitized',
     0x920A: 'FocalLength', 0xA405: 'FocalLengthIn35mm',
-    0xA434: 'LensModel', 0x8769: 'ExifIFD'
+    0xA434: 'LensModel', 0x8769: 'ExifIFD', 0x8825: 'GpsIFD'
+  };
+
+  /* GPS IFD は IFD0 とタグ番号が衝突するので別表にする */
+  var GPS_TAGS = {
+    0x0001: 'LatRef', 0x0002: 'Lat', 0x0003: 'LonRef', 0x0004: 'Lon',
+    0x0005: 'AltRef', 0x0006: 'Alt', 0x0010: 'DirRef', 0x0011: 'Dir'
   };
 
   /* TIFF ヘッダ("II*\0" か "MM\0*")の位置を探す。
@@ -53,15 +59,20 @@
     if (type === 3) return dv.getUint16(p, le);
     if (type === 4) return dv.getUint32(p, le);
     if (type === 5 || type === 10) {        // 有理数
-      var num = type === 5 ? dv.getUint32(p, le) : dv.getInt32(p, le);
-      var den = type === 5 ? dv.getUint32(p + 4, le) : dv.getInt32(p + 4, le);
-      return den ? num / den : null;
+      var vals = [];
+      for (var k = 0; k < count; k++) {
+        var num = type === 5 ? dv.getUint32(p + k * 8, le) : dv.getInt32(p + k * 8, le);
+        var den = type === 5 ? dv.getUint32(p + k * 8 + 4, le) : dv.getInt32(p + k * 8 + 4, le);
+        vals.push(den ? num / den : 0);
+      }
+      return count > 1 ? vals : vals[0];
     }
     if (type === 9) return dv.getInt32(p, le);
     return dv.getUint8(p);
   }
 
-  function readIFD(dv, le, tiff, ifd, out) {
+  function readIFD(dv, le, tiff, ifd, out, tagMap, prefix) {
+    tagMap = tagMap || TAGS; prefix = prefix || '';
     if (ifd + 2 > dv.byteLength) return;
     var n = dv.getUint16(ifd, le);
     if (n > 512) return;                     // 壊れたデータで暴走させない
@@ -69,12 +80,13 @@
       var off = ifd + 2 + i * 12;
       if (off + 12 > dv.byteLength) return;
       var tag = dv.getUint16(off, le);
-      var name = TAGS[tag];
+      var name = tagMap[tag];
       if (!name) continue;
       var v = readValue(dv, le, dv.getUint16(off + 2, le), dv.getUint32(off + 4, le), off, tiff);
       if (v === null) continue;
       if (name === 'ExifIFD') readIFD(dv, le, tiff, tiff + v, out);
-      else if (out[name] === undefined) out[name] = v;
+      else if (name === 'GpsIFD') readIFD(dv, le, tiff, tiff + v, out, GPS_TAGS, 'GPS');
+      else if (out[prefix + name] === undefined) out[prefix + name] = v;
     }
   }
 
@@ -90,6 +102,22 @@
       return Object.keys(out).length ? out : null;
     } catch (e) { return null; }
   }
+
+  /* 度分秒を十進度に。EXIF には住所は入っていないので座標までしか出せない。 */
+  function toDeg(dms, ref) {
+    if (!dms) return null;
+    var a = Array.isArray(dms) ? dms : [dms, 0, 0];
+    var d = (a[0] || 0) + (a[1] || 0) / 60 + (a[2] || 0) / 3600;
+    if (ref === 'S' || ref === 'W') d = -d;
+    return d;
+  }
+  function latLon(e) {
+    var la = toDeg(e.GPSLat, e.GPSLatRef), lo = toDeg(e.GPSLon, e.GPSLonRef);
+    return (la == null || lo == null || (la === 0 && lo === 0)) ? null : { lat: la, lon: lo };
+  }
+  var DIRS = ['北', '北北東', '北東', '東北東', '東', '東南東', '南東', '南南東',
+              '南', '南南西', '南西', '西南西', '西', '西北西', '北西', '北北西'];
+  function compass(deg) { return DIRS[Math.round(((deg % 360) + 360) % 360 / 22.5) % 16]; }
 
   /* 表示用の整形。露出は 1/60 のような分数で見せる方が読みやすい。 */
   function format(e) {
@@ -110,8 +138,12 @@
     var body = [e.Make, e.Model].filter(Boolean).join(' ');
     if (body) o['機種'] = body.replace(/^Apple Apple/, 'Apple');
     if (e.LensModel) o['レンズ'] = e.LensModel;
+    var p = latLon(e);
+    if (p) o['撮影地'] = p.lat.toFixed(5) + ', ' + p.lon.toFixed(5);
+    if (e.GPSAlt != null) o['標高'] = (+e.GPSAlt).toFixed(0) + ' m';
+    if (e.GPSDir != null) o['カメラの向き'] = compass(e.GPSDir) + '（' + (+e.GPSDir).toFixed(0) + '°）';
     return Object.keys(o).length ? o : null;
   }
 
-  return { parse: parse, format: format };
+  return { parse: parse, format: format, latLon: latLon, compass: compass };
 });

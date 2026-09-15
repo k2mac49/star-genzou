@@ -63,6 +63,8 @@
   .good{color:var(--ok)} .mid{color:var(--warn)} .bad{color:var(--bad)}
   #note{font-size:11px;color:var(--warn);margin-top:7px;line-height:1.5}
   #fname{font-size:11px;color:var(--dim);word-break:break-all}
+  table.m a{color:var(--accent);text-decoration:none}
+  table.m a:hover{text-decoration:underline}
   .inert{opacity:.35}
   .inert input{pointer-events:none}
   #verdict.bad{color:var(--bad)} #verdict.mid{color:var(--warn)} #verdict.good{color:var(--ok)}
@@ -270,8 +272,17 @@
   function showExif(exif) {
     var t = $('exifTable'), f = StarExif.format(exif);
     if (!f) { t.innerHTML = '<tr><td>撮影情報がありません</td><td></td></tr>'; return; }
+    var pos = StarExif.latLon(exif);
     t.innerHTML = Object.keys(f).map(function (k) {
-      return '<tr><td>' + k + '</td><td>' + String(f[k]).replace(/</g, '&lt;') + '</td></tr>';
+      var v = String(f[k]).replace(/</g, '&lt;');
+      /* EXIF に住所は入っていない。座標までしか分からないので、
+         押したときだけ地図サービスに飛ぶリンクにしておく。
+         自動で外部に問い合わせるとオフラインで動かなくなる。 */
+      if (k === '撮影地' && pos) {
+        v = '<a href="https://www.google.com/maps?q=' + pos.lat.toFixed(6) + ',' + pos.lon.toFixed(6) +
+            '" target="_blank" rel="noopener" title="地図を開きます（このときだけ外部に接続します）">' + v + ' ↗</a>';
+      }
+      return '<tr><td>' + k + '</td><td>' + v + '</td></tr>';
     }).join('');
   }
 
@@ -525,7 +536,10 @@
       o.textContent = (d === '' ? '(ルート)' : d.split('/').pop()) + ' (' + n + ')';
       dsel.appendChild(o);
     });
-    dsel.disabled = dirs.length < 2;
+    /* フォルダが1つでも無効にしない。普通の使い方(フォルダを1つ選ぶ)で
+       グレーアウトして壊れて見えるため。1つなら選択肢も1つだが、
+       どのフォルダを開いているかが読めることに意味がある。 */
+    dsel.disabled = dirs.length === 0;
     dsel.value = dirs.length > 1 ? '*' : dirs[0];
     selectDir(dsel.value);
   }
