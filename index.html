@@ -108,7 +108,7 @@
 
   <div class="sec">
     <h3>自動調整</h3>
-    <div class="sub">画像を測って決めた値です。ここから微調整してください。</div>
+    <div class="sub">下のスライダーは「設定値」ではなく<b>目標値</b>です。全画像で同じ値でも、その画像の測定結果に合わせて実際の処理量は変わります（下の「解析結果」で確認できます）。</div>
     <div class="btns">
       <button id="auto">自動に戻す</button>
       <button id="reana" title="カブリの次数を変えたときに押してください">再解析</button>
@@ -117,7 +117,7 @@
   </div>
 
   <div class="sec">
-    <h3>明るさと黒</h3>
+    <h3>明るさと黒（目標値）</h3>
     <div class="row"><label>ノイズ許容量</label><span class="val" id="vNoise"></span></div>
     <input type="range" id="sNoise" min="3" max="30" step="0.5">
     <div class="sub">これを超えないところまで自動でストレッチを弱めます</div>
@@ -174,6 +174,10 @@
   <div class="sec">
     <h3>解析結果</h3>
     <table class="m">
+      <tr><td>空の明るさ（測定）</td><td id="iSkyMed">-</td></tr>
+      <tr><td>空のノイズ（測定）</td><td id="iSkyNoise">-</td></tr>
+      <tr><td>決まった黒点</td><td id="iBlackPt">-</td></tr>
+      <tr><td>持ち上げ倍率</td><td id="iGain">-</td></tr>
       <tr><td>実際のストレッチ量</td><td id="iUsed">-</td></tr>
       <tr><td>色の測定信頼度</td><td id="iConf">-</td></tr>
       <tr><td>入力の黒潰れ</td><td id="iBlack">-</td></tr>
@@ -659,6 +663,11 @@
     var conf = info.confidence;
     $('effNeu').textContent = '実効 ' + ($('cNeu').checked ? conf.toFixed(2) : '0.00');
     $('effRad').textContent = '実効 ' + ($('cRad').checked ? conf.toFixed(2) : '0.00');
+    $('iSkyMed').textContent = info.skyMedian.toFixed(1);
+    $('iSkyNoise').textContent = info.skyNoise.toFixed(2);
+    $('iBlackPt').textContent = info.blackPoint.toFixed(1);
+    $('iGain').innerHTML = info.stretchGain.toFixed(2) + ' <span class="tag">' +
+      (info.stretchGain < 0.98 ? '押し下げ' : info.stretchGain > 1.02 ? '持ち上げ' : '等倍') + '</span>';
     $('iUsed').textContent = info.targetBgUsed.toFixed(3) +
       (info.targetBgUsed < p.targetBg - 0.002 ? '（自動で抑制）' : '');
     $('iConf').innerHTML = cls(conf, 0.9, 0.4, true) ;

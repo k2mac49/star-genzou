@@ -721,6 +721,11 @@
        中央値も MAD も潰れた 0 の山から出た値で、意味を持たないため。 */
     if (M.noData) { clip = 0; span = 1; m3 = 0.5; t = med; }
     info.noData = !!M.noData;
+    // 画像ごとに何が実際に変わっているのかを外から見えるようにしておく
+    info.skyMedian = med * 255;          // 空の明るさ(測定値)
+    info.skyNoise = mad * 255;           // 空のノイズ(測定値)
+    info.blackPoint = clip * 255;        // 決まった黒点
+    info.stretchGain = gainAt(m3);       // 背景付近をこの倍率で持ち上げている
     info.targetBgUsed = t;
     info.predictedNoise = noiseNorm * gainAt(m3) * 255;
 
