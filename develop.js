@@ -56,7 +56,13 @@
        動かすための口。色かぶりの手動補正はここで行う。 */
     levelR:       0,
     levelG:       0,
-    levelB:       0
+    levelB:       0,
+    /* チャンネル別のトーンカーブ。256要素の Uint8Array か null。
+       ヒストグラム上でつまんだ調整をここに流し込む。オフセットを足した
+       あとに引くので、画面に出ている山の位置とカーブの位置が一致する。 */
+    lutR:         null,
+    lutG:         null,
+    lutB:         null
   };
 
   /* ---------- sRGB 変換テーブル ---------- */
@@ -986,6 +992,7 @@
 
     var out = M.out, sat = P.saturation;
     var lvR = P.levelR || 0, lvG = P.levelG || 0, lvB = P.levelB || 0;
+    var luR = P.lutR || null, luG = P.lutG || null, luB = P.lutB || null;
     for (var i6 = 0; i6 < n; i6++) {
       var b4 = i6 * 3, q2 = i6 * 4;
       var r = w2[b4], g = w2[b4 + 1], bl = w2[b4 + 2];
@@ -993,7 +1000,13 @@
         var L = 0.2126 * r + 0.7152 * g + 0.0722 * bl;
         r = L + (r - L) * sat; g = L + (g - L) * sat; bl = L + (bl - L) * sat;
       }
-      out[q2] = r * 255 + lvR; out[q2 + 1] = g * 255 + lvG; out[q2 + 2] = bl * 255 + lvB;
+      var vr = r * 255 + lvR, vg = g * 255 + lvG, vb = bl * 255 + lvB;
+      vr = vr < 0 ? 0 : vr > 255 ? 255 : vr;
+      vg = vg < 0 ? 0 : vg > 255 ? 255 : vg;
+      vb = vb < 0 ? 0 : vb > 255 ? 255 : vb;
+      out[q2] = luR ? luR[vr | 0] : vr;
+      out[q2 + 1] = luG ? luG[vg | 0] : vg;
+      out[q2 + 2] = luB ? luB[vb | 0] : vb;
       out[q2 + 3] = 255;
     }
     if (outInfo) for (var ik in info) outInfo[ik] = info[ik];

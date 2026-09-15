@@ -34,10 +34,27 @@
     background:rgba(11,13,16,.75);padding:3px 8px;border-radius:4px;display:none}
 
   /* ---- 右: 操作パネル ---- */
-  #panel{width:335px;flex:none;background:var(--panel);border-left:1px solid var(--line);
+  /* 右ペインは幅をドラッグで変えられる */
+  #split{width:6px;flex:none;cursor:col-resize;background:var(--line);opacity:.6}
+  #split:hover,#split.drag{background:var(--accent);opacity:1}
+  #panel{width:335px;min-width:240px;max-width:720px;flex:none;background:var(--panel);
     display:flex;flex-direction:column;overflow-y:auto}
   .sec{padding:12px 14px;border-bottom:1px solid var(--line)}
-  .sec h3{margin:0 0 9px;font-size:11px;letter-spacing:.09em;color:var(--dim);font-weight:600}
+  /* 見出しをクリックで折りたたむ */
+  .sec h3{margin:0 0 9px;font-size:11px;letter-spacing:.09em;color:var(--dim);font-weight:600;
+    cursor:pointer;user-select:none;display:flex;align-items:center;gap:6px}
+  .sec h3::before{content:"\25BE";font-size:9px;transition:transform .12s}
+  .sec.collapsed h3::before{transform:rotate(-90deg)}
+  .sec.collapsed h3{margin:0}
+  .sec.collapsed > *:not(h3){display:none}
+  /* 説明はバルーンに寄せる */
+  .tip{display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;
+    border:1px solid var(--line);border-radius:50%;font-size:9px;color:var(--dim);
+    cursor:help;flex:none;margin-left:5px}
+  .tip:hover{color:var(--accent);border-color:var(--accent)}
+  #tip{position:fixed;z-index:60;max-width:300px;background:#0d1015;color:var(--fg);
+    border:1px solid var(--accent);border-radius:6px;padding:7px 10px;font-size:11.5px;
+    line-height:1.6;pointer-events:none;display:none;box-shadow:0 6px 20px rgba(0,0,0,.6)}
   .row{display:flex;align-items:center;gap:8px;margin:7px 0}
   .row label{flex:1;font-size:12px}
   .row .val{width:56px;text-align:right;color:var(--accent);font-variant-numeric:tabular-nums;font-size:12px}
@@ -63,8 +80,16 @@
   .good{color:var(--ok)} .mid{color:var(--warn)} .bad{color:var(--bad)}
   #note{font-size:11px;color:var(--warn);margin-top:7px;line-height:1.5}
   #fname{font-size:11px;color:var(--dim);word-break:break-all}
-  #hist{width:100%;height:130px;display:block;background:#0e1014;border:1px solid var(--line);
-    border-radius:5px;cursor:ew-resize;touch-action:none}
+  #hist{width:100%;height:160px;display:block;background:#0e1014;border:1px solid var(--line);
+    border-radius:5px;cursor:crosshair;touch-action:none}
+  .chsel{padding:4px 10px;font-size:11px}
+  .chsel.on{background:#2a4d78;border-color:#37618f;color:#fff}
+  .pin{display:inline-flex;align-items:center;gap:5px;font-size:10.5px;background:var(--panel2);
+    border:1px solid var(--line);border-radius:4px;padding:2px 5px;margin:3px 3px 0 0}
+  .pin.sel{border-color:var(--accent)}
+  .pin b{font-weight:600}
+  .pin span.x{cursor:pointer;color:var(--dim);padding:0 2px}
+  .pin span.x:hover{color:var(--bad)}
   table.m a{color:var(--accent);text-decoration:none}
   table.m a:hover{text-decoration:underline}
   .inert{opacity:.35}
@@ -98,6 +123,7 @@
   </div>
 </div>
 
+<div id="split" title="ドラッグで幅を変えられます"></div>
 <div id="panel">
   <div class="sec">
     <h3>画像</h3>
@@ -162,14 +188,26 @@
 
   <div class="sec">
     <h3>RGB ヒストグラム</h3>
-    <canvas id="hist" width="620" height="260"></canvas>
-    <div class="sub">横軸 = 明るさ 0-255 / 縦軸 = 出現数（対数）。
-    下の ▲ を左右にドラッグすると、そのチャンネルだけ動きます。
-    <b>赤の山を緑の山に重ねると色かぶりが消えます。</b></div>
+    <div class="btns" style="margin-bottom:8px;align-items:center">
+      <button class="chsel on" data-ch="3">RGB</button>
+      <button class="chsel" data-ch="0">R</button>
+      <button class="chsel" data-ch="1">G</button>
+      <button class="chsel" data-ch="2">B</button>
+      <label class="chk" style="margin:0 0 0 auto;font-size:11px">
+        <input type="checkbox" id="histFill" checked>塗りつぶし</label>
+    </div>
+    <canvas id="hist" width="640" height="320"></canvas>
+    <div class="sub">上でチャンネルを選び、グラフ内をクリックするとピンが増えます。
+    上下で階調の圧縮・伸長（山の高さ）、左右でピンの位置。
+    下の ▲ はチャンネル全体の横ずらしです。</div>
+    <div class="row"><label>選んだピンの幅 (Q)</label><span class="val" id="vQ">-</span></div>
+    <input type="range" id="sQ" min="0.4" max="8" step="0.1" value="2" disabled>
+    <div class="sub">Q が大きいほど狭い範囲だけに効きます。小さいと周辺まで滑らかに影響します。</div>
     <div class="btns">
       <button id="histAuto">山を揃える</button>
-      <button id="histReset">ずらしを戻す</button>
+      <button id="histReset">全部戻す</button>
     </div>
+    <div id="pinList"></div>
     <div class="sub" id="histVal" style="margin-top:7px"></div>
   </div>
 
@@ -212,6 +250,7 @@
   </div>
 </div>
 
+<div id="tip"></div>
 <input type="file" id="picker" accept=".heic,.HEIC,.heif,image/*" multiple style="display:none">
 <input type="file" id="dirpicker" webkitdirectory directory style="display:none">
 
@@ -280,6 +319,7 @@
     p.neutralize = $('cNeu').checked ? 1 : 0;
     p.radialColor = $('cRad').checked ? 1 : 0;
     p.levelR = levels.levelR; p.levelG = levels.levelG; p.levelB = levels.levelB;
+    p.lutR = lutCache[0]; p.lutG = lutCache[1]; p.lutB = lutCache[2];
     return p;
   }
   function setParams(p) {
@@ -650,17 +690,24 @@
   /* ドロップされたものがフォルダなら中を読む */
   function filesFromDrop(dt) {
     var items = dt.items, entries = [];
-    if (items && items.length && items[0].webkitGetAsEntry) {
-      // entry はハンドラを抜けると無効になるので、ここで同期的に取り出す
+    // entry はハンドラを抜けると無効になるので、ここで同期的に取り出す
+    if (items && items.length) {
       for (var i = 0; i < items.length; i++) {
-        var en = items[i].webkitGetAsEntry();
-        if (en) entries.push(en);
+        var get = items[i].webkitGetAsEntry || items[i].getAsEntry;
+        if (!get) continue;
+        try { var en = get.call(items[i]); if (en) entries.push(en); } catch (err) { }
       }
     }
-    if (!entries.length) return Promise.resolve(Array.prototype.slice.call(dt.files || []));
-    return Promise.all(entries.map(function (x) { return readEntry(x, ''); })).then(function (a) {
-      return a.reduce(function (x, y) { return x.concat(y); }, []);
-    });
+    var plain = Array.prototype.slice.call(dt.files || []);
+    if (!entries.length) return Promise.resolve(plain);
+    return Promise.all(entries.map(function (x) { return readEntry(x, ''); }))
+      .then(function (a) {
+        var all = a.reduce(function (x, y) { return x.concat(y); }, []);
+        /* フォルダとして読めなかった場合に黙って終わらないよう、
+           通常のファイル一覧に落とす */
+        return all.length ? all : plain;
+      })
+      .catch(function () { return plain; });
   }
   function readEntry(en, prefix) {
     prefix = prefix || '';
@@ -669,7 +716,9 @@
     });
     if (!en.isDirectory) return Promise.resolve([]);
     var sub = prefix ? prefix + '/' + en.name : en.name;
-    var rd = en.createReader(), all = [];
+    var rd;
+    try { rd = en.createReader(); } catch (err) { return Promise.resolve([]); }
+    var all = [];
     return new Promise(function (res) {
       (function more() {
         rd.readEntries(function (ents) {
@@ -680,6 +729,11 @@
             return;
           }
           all = all.concat(Array.prototype.slice.call(ents));
+          if (all.length > 5000) {                 // 巨大なフォルダで固まらせない
+            Promise.all(all.slice(0, 5000).map(function (x) { return readEntry(x, sub); }))
+              .then(function (a) { res(a.reduce(function (x, y) { return x.concat(y); }, [])); });
+            return;
+          }
           more();
         }, function () { res([]); });
       })();
@@ -763,13 +817,126 @@
     return '<span class="' + c + '">' + v + '</span>';
   }
 
-  /* ---------- RGB ヒストグラム ----------
-     現像は R/G/B を別々に処理しているので、その結果を直接見せて
-     直接動かせるようにする。背景の山の位置がチャンネルごとにずれている
-     状態が「色かぶり」そのものなので、山を重ねれば手で補正できる。 */
+  /* ---------- 右ペインの体裁 ----------
+     説明文を並べると縦に伸びて目的の操作が遠くなるので、
+     ? のバルーンに畳んで、見出しで節ごとに折りたためるようにする。 */
+  var tipEl = $("tip");
+  function setupTips() {
+    Array.prototype.slice.call(document.querySelectorAll("#panel .sub")).forEach(function (el) {
+      // id 付きの .sub は表示内容を動的に書き換える場所なので消さない
+      if (el.id) return;
+      var txt = el.textContent.replace(/\s+/g, " ").trim();
+      if (!txt) return;
+      var host = null, p = el.previousElementSibling;
+      while (p && !host) {
+        if (p.classList.contains("row")) host = p.querySelector("label");
+        else if (p.tagName === "H3") host = p;
+        else if (p.classList.contains("chk")) host = p;
+        p = p.previousElementSibling;
+      }
+      if (!host) host = el.parentNode.querySelector("h3");
+      if (!host) return;
+      var b = document.createElement("span");
+      b.className = "tip"; b.textContent = "?";
+      b.setAttribute("data-tip", txt);
+      host.appendChild(b);
+      el.remove();
+    });
+  }
+  document.addEventListener("mouseover", function (e) {
+    var t = e.target.closest ? e.target.closest("[data-tip]") : null;
+    if (!t) return;
+    tipEl.textContent = t.getAttribute("data-tip");
+    tipEl.style.display = "block";
+    var r = t.getBoundingClientRect();
+    var x = Math.max(8, r.left - tipEl.offsetWidth - 10);
+    tipEl.style.left = x + "px";
+    tipEl.style.top = Math.min(window.innerHeight - tipEl.offsetHeight - 8, Math.max(4, r.top - 4)) + "px";
+  });
+  document.addEventListener("mouseout", function (e) {
+    if (e.target.closest && e.target.closest("[data-tip]")) tipEl.style.display = "none";
+  });
+
+  function setupCollapse() {
+    var open = {};
+    try { open = JSON.parse(localStorage.getItem("starSec") || "{}"); } catch (err) { }
+    Array.prototype.slice.call(document.querySelectorAll("#panel .sec")).forEach(function (sec) {
+      var h = sec.querySelector("h3");
+      if (!h) return;
+      var key = h.textContent.trim();
+      if (open[key] === false) sec.classList.add("collapsed");
+      h.addEventListener("click", function (e) {
+        if (e.target.classList.contains("tip")) return;
+        sec.classList.toggle("collapsed");
+        open[key] = !sec.classList.contains("collapsed");
+        try { localStorage.setItem("starSec", JSON.stringify(open)); } catch (err) { }
+      });
+    });
+  }
+
+  function setupSplit() {
+    var sp = $("split"), pn = $("panel"), dragging = false;
+    try {
+      var w = parseInt(localStorage.getItem("starPanelW") || "", 10);
+      if (w >= 240 && w <= 720) pn.style.width = w + "px";
+    } catch (err) { }
+    sp.addEventListener("pointerdown", function (e) {
+      dragging = true; sp.classList.add("drag"); sp.setPointerCapture(e.pointerId); e.preventDefault();
+    });
+    sp.addEventListener("pointermove", function (e) {
+      if (!dragging) return;
+      pn.style.width = Math.max(240, Math.min(720, window.innerWidth - e.clientX)) + "px";
+      if (full) { if (vw.fitMode) vw.zoom = fitZoom(); draw(); }
+      if (model) drawHist();
+    });
+    ["pointerup", "pointercancel"].forEach(function (ev) {
+      sp.addEventListener(ev, function () {
+        if (!dragging) return;
+        dragging = false; sp.classList.remove("drag");
+        try { localStorage.setItem("starPanelW", parseInt(pn.style.width, 10)); } catch (err) { }
+      });
+    });
+  }
+
+  /* ---------- RGB ヒストグラム（表示 + 編集） ----------
+     現像は R/G/B を別々に処理しているので、その結果を直接見せて直接動かす。
+
+     「線を上下させる」を階調の圧縮・伸長として実装している。
+     ある明るさの周りを圧縮すればそこに画素が集まって山が高くなり、
+     伸長すれば散って低くなる。つまり見た目の操作と中身の操作が一致する。
+     ピンごとに中心・強さ・幅(Q)を持ち、個別に消せる。 */
   var HB = 256;
   var hist = [new Float32Array(HB), new Float32Array(HB), new Float32Array(HB)];
   var chMed = [0, 0, 0], histMax = 1;
+  var pins = [];            // {ch:0..2 or 3(全部), x, gain, q}
+  var curChan = 3, selPin = -1;
+  var lutCache = [null, null, null];
+
+  function buildLUTs() {
+    for (var c = 0; c < 3; c++) {
+      var mine = pins.filter(function (p) { return p.ch === c || p.ch === 3; });
+      if (!mine.length) { lutCache[c] = null; continue; }
+      /* 傾き slope(x) を作り、積分してカーブにする。
+         slope は常に正なので階調が反転することがない。 */
+      var slope = new Float64Array(HB), acc = new Float64Array(HB + 1);
+      for (var x = 0; x < HB; x++) {
+        var e = 0;
+        for (var i = 0; i < mine.length; i++) {
+          var p = mine[i], sg = 48 / Math.max(0.4, p.q);
+          var d = x - p.x;
+          e += p.gain * Math.exp(-(d * d) / (2 * sg * sg));
+        }
+        slope[x] = Math.exp(-e);
+        acc[x + 1] = acc[x] + slope[x];
+      }
+      var lut = new Uint8Array(HB), tot = acc[HB] || 1;
+      for (var k = 0; k < HB; k++) {
+        var v = acc[k + 1] / tot * 255;
+        lut[k] = v < 0 ? 0 : v > 255 ? 255 : Math.round(v);
+      }
+      lutCache[c] = lut;
+    }
+  }
 
   function computeHist(out, w, h) {
     for (var c = 0; c < 3; c++) hist[c].fill(0);
@@ -780,76 +947,173 @@
     }
     histMax = 1;
     for (var c2 = 0; c2 < 3; c2++) {
-      var acc = 0, half = cnt / 2, m = 0, done = false;
+      var a = 0, half = cnt / 2, m = 0, done = false;
       for (var k = 0; k < HB; k++) {
         if (hist[c2][k] > histMax) histMax = hist[c2][k];
-        if (!done) { acc += hist[c2][k]; if (acc >= half) { m = k; done = true; } }
+        if (!done) { a += hist[c2][k]; if (a >= half) { m = k; done = true; } }
       }
       chMed[c2] = m;
     }
   }
 
   var COLS = ["#ff5a5a", "#5ade7a", "#5aa8ff"];
-  function drawHist() {
-    var cv2 = $("hist"), x2 = cv2.getContext("2d");
-    var W = cv2.width, H = cv2.height, PAD = 26;          // 下に ▲ の帯
-     var GH = H - PAD;
-    x2.clearRect(0, 0, W, H);
-    var lg = Math.log(1 + histMax);
-    x2.globalCompositeOperation = "lighter";
-    for (var c = 0; c < 3; c++) {
-      x2.beginPath(); x2.moveTo(0, GH);
-      for (var k = 0; k < HB; k++) {
-        var v = Math.log(1 + hist[c][k]) / lg;
-        x2.lineTo(k / (HB - 1) * W, GH - v * (GH - 4));
-      }
-      x2.lineTo(W, GH); x2.closePath();
-      x2.fillStyle = COLS[c] + "55"; x2.fill();
-      x2.strokeStyle = COLS[c] + "cc"; x2.lineWidth = 2; x2.stroke();
-    }
-    x2.globalCompositeOperation = "source-over";
-    for (var c3 = 0; c3 < 3; c3++) {
-      var px = chMed[c3] / (HB - 1) * W;
-      x2.beginPath();
-      x2.moveTo(px, GH + 3); x2.lineTo(px - 8, GH + 19); x2.lineTo(px + 8, GH + 19);
-      x2.closePath(); x2.fillStyle = COLS[c3]; x2.fill();
-    }
-    $("histVal").innerHTML = "背景の山: " +
-      ['R', 'G', 'B'].map(function (nm, i) {
-        return '<span style="color:' + COLS[i] + '">' + nm + ' ' + chMed[i] + '</span>';
-      }).join(" / ") +
-      "　ずらし: " + [levels.levelR, levels.levelG, levels.levelB]
-        .map(function (v) { return (v > 0 ? "+" : "") + Math.round(v); }).join(" / ");
+  var PADB = 30;                                   // 下の ▲ の帯
+  function histGeom() {
+    var cv2 = $("hist");
+    return { W: cv2.width, H: cv2.height, GH: cv2.height - PADB };
+  }
+  function histYof(c, x) {                         // その明るさでの山の高さ(px)
+    var g = histGeom(), lg = Math.log(1 + histMax);
+    return g.GH - Math.log(1 + hist[c][Math.max(0, Math.min(255, x))]) / lg * (g.GH - 6);
   }
 
-  var dragCh = -1;
-  function histX(e) {
-    var r = $("hist").getBoundingClientRect();
-    return Math.max(0, Math.min(255, Math.round((e.clientX - r.left) / r.width * 255)));
+  function drawHist() {
+    var cv2 = $("hist"), x2 = cv2.getContext("2d"), g = histGeom();
+    var fill = $("histFill").checked;
+    x2.clearRect(0, 0, g.W, g.H);
+    var lg = Math.log(1 + histMax);
+    if (fill) x2.globalCompositeOperation = "lighter";
+    for (var c = 0; c < 3; c++) {
+      var dim = (curChan !== 3 && curChan !== c);
+      x2.beginPath(); x2.moveTo(0, g.GH);
+      for (var k = 0; k < HB; k++) {
+        var v = Math.log(1 + hist[c][k]) / lg;
+        x2.lineTo(k / (HB - 1) * g.W, g.GH - v * (g.GH - 6));
+      }
+      if (fill) {
+        x2.lineTo(g.W, g.GH); x2.closePath();
+        x2.fillStyle = COLS[c] + (dim ? "22" : "55"); x2.fill();
+      }
+      x2.strokeStyle = COLS[c] + (dim ? "44" : "dd");
+      x2.lineWidth = dim ? 1 : 2; x2.stroke();
+    }
+    x2.globalCompositeOperation = "source-over";
+
+    // 横ずらしの ▲
+    for (var c3 = 0; c3 < 3; c3++) {
+      var px = chMed[c3] / (HB - 1) * g.W;
+      x2.beginPath();
+      x2.moveTo(px, g.GH + 4); x2.lineTo(px - 8, g.GH + 20); x2.lineTo(px + 8, g.GH + 20);
+      x2.closePath(); x2.fillStyle = COLS[c3]; x2.fill();
+    }
+
+    // ピン
+    for (var i = 0; i < pins.length; i++) {
+      var p = pins[i];
+      var cc = p.ch === 3 ? 1 : p.ch;
+      var px2 = p.x / (HB - 1) * g.W, py = histYof(cc, p.x);
+      x2.beginPath(); x2.arc(px2, py, i === selPin ? 7 : 5, 0, 6.2832);
+      x2.fillStyle = p.ch === 3 ? "#e6e9ee" : COLS[p.ch];
+      x2.fill();
+      x2.strokeStyle = i === selPin ? "#ffffff" : "#000000"; x2.lineWidth = 2; x2.stroke();
+    }
+
+    $("histVal").innerHTML = "背景の山: " + ["R", "G", "B"].map(function (nm, i2) {
+      return "<span style='color:" + COLS[i2] + "'>" + nm + " " + chMed[i2] + "</span>";
+    }).join(" / ") + "　横ずらし: " +
+      [levels.levelR, levels.levelG, levels.levelB].map(function (v) {
+        return (v > 0 ? "+" : "") + Math.round(v);
+      }).join(" / ");
+    drawPinList();
+  }
+
+  function drawPinList() {
+    var el = $("pinList");
+    if (!pins.length) { el.innerHTML = "<span class='sub'>ピンなし</span>"; return; }
+    el.innerHTML = pins.map(function (p, i) {
+      var nm = p.ch === 3 ? "RGB" : ["R", "G", "B"][p.ch];
+      return "<span class='pin" + (i === selPin ? " sel" : "") + "' data-i='" + i + "'>" +
+        "<b style='color:" + (p.ch === 3 ? "#e6e9ee" : COLS[p.ch]) + "'>" + nm + "</b>" +
+        " " + p.x + " / " + (p.gain > 0 ? "+" : "") + p.gain.toFixed(2) +
+        " / Q" + p.q.toFixed(1) + "<span class='x' data-del='" + i + "'>&times;</span></span>";
+    }).join("");
+  }
+  $("pinList").addEventListener("click", function (e) {
+    var del = e.target.getAttribute("data-del");
+    if (del !== null) {
+      pins.splice(parseInt(del, 10), 1); selPin = -1;
+      afterPinChange(); return;
+    }
+    var host = e.target.closest ? e.target.closest(".pin") : null;
+    if (host) { selPin = parseInt(host.getAttribute("data-i"), 10); syncQ(); drawHist(); }
+  });
+
+  function syncQ() {
+    var on = selPin >= 0 && pins[selPin];
+    $("sQ").disabled = !on;
+    $("sQ").value = on ? pins[selPin].q : 2;
+    $("vQ").textContent = on ? pins[selPin].q.toFixed(1) : "-";
+  }
+  $("sQ").addEventListener("input", function () {
+    if (selPin < 0 || !pins[selPin]) return;
+    pins[selPin].q = parseFloat($("sQ").value);
+    $("vQ").textContent = pins[selPin].q.toFixed(1);
+    afterPinChange();
+  });
+  function afterPinChange() { buildLUTs(); render(false); scheduleIdle(); }
+
+  // チャンネル選択
+  Array.prototype.slice.call(document.querySelectorAll(".chsel")).forEach(function (b) {
+    b.addEventListener("click", function () {
+      curChan = parseInt(b.getAttribute("data-ch"), 10);
+      document.querySelectorAll(".chsel").forEach(function (o) { o.classList.remove("on"); });
+      b.classList.add("on");
+      drawHist();
+    });
+  });
+  $("histFill").addEventListener("change", drawHist);
+
+  /* ---- ドラッグ ---- */
+  var dragCh = -1, dragPin = -1, dragY0 = 0, dragG0 = 0;
+  function histPos(e) {
+    var cv2 = $("hist"), r = cv2.getBoundingClientRect();
+    return {
+      x: Math.max(0, Math.min(255, Math.round((e.clientX - r.left) / r.width * 255))),
+      y: (e.clientY - r.top) / r.height * cv2.height
+    };
   }
   $("hist").addEventListener("pointerdown", function (e) {
     if (!model) return;
-    var x = histX(e), best = -1, bd = 1e9;
-    for (var c = 0; c < 3; c++) {
-      var d = Math.abs(chMed[c] - x);
-      if (d < bd) { bd = d; best = c; }
+    var p = histPos(e), g = histGeom();
+    $("hist").setPointerCapture(e.pointerId); e.preventDefault();
+
+    if (p.y > g.GH) {                       // 下の帯 = 横ずらし
+      var best = -1, bd = 1e9;
+      for (var c = 0; c < 3; c++) { var d = Math.abs(chMed[c] - p.x); if (d < bd) { bd = d; best = c; } }
+      if (bd <= 24) dragCh = best;
+      return;
     }
-    if (bd > 24) return;
-    dragCh = best; $("hist").setPointerCapture(e.pointerId); e.preventDefault();
+    // 既存のピンを掴む
+    for (var i = 0; i < pins.length; i++) {
+      var cc = pins[i].ch === 3 ? 1 : pins[i].ch;
+      var dx = (pins[i].x - p.x) / 255 * g.W, dy = histYof(cc, pins[i].x) - p.y;
+      if (dx * dx + dy * dy < 196) {
+        dragPin = i; selPin = i; dragY0 = p.y; dragG0 = pins[i].gain; syncQ(); drawHist(); return;
+      }
+    }
+    // 無ければ作る
+    pins.push({ ch: curChan, x: p.x, gain: 0, q: parseFloat($("sQ").value) || 2 });
+    dragPin = pins.length - 1; selPin = dragPin; dragY0 = p.y; dragG0 = 0;
+    syncQ(); afterPinChange();
   });
   $("hist").addEventListener("pointermove", function (e) {
-    if (dragCh < 0) return;
-    var key = ["levelR", "levelG", "levelB"][dragCh];
-    levels[key] += histX(e) - chMed[dragCh];
-    if (levels[key] > 120) levels[key] = 120;
-    if (levels[key] < -120) levels[key] = -120;
-    render(false); scheduleIdle();
+    if (dragCh < 0 && dragPin < 0) return;
+    var p = histPos(e), g = histGeom();
+    if (dragCh >= 0) {
+      var key = ["levelR", "levelG", "levelB"][dragCh];
+      levels[key] += p.x - chMed[dragCh];
+      levels[key] = Math.max(-120, Math.min(120, levels[key]));
+      render(false); scheduleIdle(); return;
+    }
+    var pin = pins[dragPin];
+    pin.x = p.x;
+    pin.gain = Math.max(-2, Math.min(2, dragG0 + (dragY0 - p.y) / g.GH * 2.5));
+    afterPinChange();
   });
   ["pointerup", "pointercancel"].forEach(function (ev) {
-    $("hist").addEventListener(ev, function () { dragCh = -1; });
+    $("hist").addEventListener(ev, function () { dragCh = -1; dragPin = -1; });
   });
 
-  /* 山を揃える = 3チャンネルの背景を同じ位置に持ってくる */
   $("histAuto").addEventListener("click", function () {
     if (!model) return;
     var t = Math.min(chMed[0], chMed[1], chMed[2]);
@@ -860,7 +1124,7 @@
   });
   $("histReset").addEventListener("click", function () {
     levels.levelR = levels.levelG = levels.levelB = 0;
-    render(false); scheduleIdle();
+    pins = []; selPin = -1; syncQ(); afterPinChange();
   });
 
   /* 指標は全画素を走査するので、操作が止まってからまとめて出す */
@@ -894,6 +1158,7 @@
   ['cNeu', 'cRad'].forEach(function (id) { $(id).addEventListener('change', onInput); });
 
   $('auto').addEventListener('click', function () {
+    pins = []; selPin = -1; buildLUTs(); syncQ();
     if (!model) return;
     setParams(autoParams(model)); fullDirty = true; render(false); scheduleIdle();
   });
@@ -975,11 +1240,24 @@
   });
   window.addEventListener('drop', function (e) {
     e.preventDefault();
+    busy(true, 'フォルダを読み込み中…');
     filesFromDrop(e.dataTransfer).then(function (files) {
-      if (files.length) setList(files);
+      busy(false);
+      if (!files.length) {
+        alert('ドロップされたものから画像が見つかりませんでした。\n' +
+              'フォルダの場合は中に HEIC / JPEG / PNG が入っているか確認してください。');
+        return;
+      }
+      setList(files);
+    }).catch(function (err) {
+      busy(false);
+      alert('読み込みに失敗しました: ' + (err && err.message ? err.message : err));
     });
   });
 
+  setupTips();
+  setupCollapse();
+  setupSplit();
   setParams(autoParams({ blackRatio: 0 }));
 })();
 </script>
