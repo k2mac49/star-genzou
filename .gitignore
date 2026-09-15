@@ -13,3 +13,7 @@ sample/
 node_modules/
 .DS_Store
 Thumbs.db
+
+# README 用の図版は含める
+!docs/
+!docs/*.png
