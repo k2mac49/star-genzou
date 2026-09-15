@@ -39,6 +39,17 @@
     noiseBudget:  12,    // 出力背景ノイズの上限(0-255)。超えないようストレッチ量を自動調整。0=制限なし
     subClipBudget: 0.05, // 減算で潰してよい画素の割合。小さいほど安全だが色かぶりが残る
     skyMask:      1,     // 地上(前景)を背景モデルから外す。0=off
+    /* 背景モデル 0=多項式 / 1=RBF(動径基底関数)
+       RBF は Siril や GraXpert が既定で使う現代的な手法で実装して比較したが、
+       この用途では多項式に明確に劣った(27枚で悪化 7枚 -> 15枚、周辺色ムラ平均
+       6.4 -> 15.3)。RBF の柔軟性は「淡い対象が画面の一部を占める」前提のもので、
+       天の川が画面全体を覆う広角一枚撮りでは、天の川そのものを背景として
+       吸い込んでしまう。外れ値除去を足しても中心点を減らしても改善しなかった。
+       地上が大きく入る1秒露光の写真だけは RBF が勝つが、そちらは露出不足が
+       主因なので、モデルを変えても解決しない。 */
+    bgModel:      0,
+    rbfSmooth:    0.02,  // RBF の平滑化。大きいほど滑らか
+    rbfCenters:   180,   // RBF の中心点数。多いほど柔軟だが天の川を消しやすい
     blackDataFloor: 0.40, // 入力画素のこの割合以上が黒潰れなら、復元対象の情報が無いと判断して素通しする
     exposure:     1.00   // 全体の明るさ微調整
   };
@@ -183,6 +194,105 @@
     }
     return pts;
   }
+
+  /* ---------- RBF (動径基底関数) による背景推定 ----------
+     多項式は「画面全体を1本の式で表す」ので、単純な傾斜しか扱えない。
+     実際の空は光害が複数方向から来たり地上の照り返しが入ったりして、
+     1枚の平面やお椀では表現できない (地上入りの構図で失敗する原因がこれ)。
+
+     RBF は観測点ごとに「山」を置いて足し合わせるので局所的な変化を追える。
+     Siril や GraXpert が既定で採用している方式。薄板スプライン r^2*log(r) を
+     使い、対角に平滑化項を足してノイズに追従しすぎないようにする。 */
+  function fitRBF(pts, lambda, maxCenters) {
+    var N = pts.length;
+    if (N < 8) return null;
+    var step = Math.max(1, Math.ceil(N / maxCenters));
+    var C = [];
+    for (var i = 0; i < N; i += step) C.push(pts[i]);
+    var n = C.length, m = n + 3;
+    var A = [], b = new Float64Array(m);
+    for (var r = 0; r < m; r++) A.push(new Float64Array(m));
+    for (var i2 = 0; i2 < n; i2++) {
+      for (var j = 0; j < n; j++) {
+        var dx = C[i2].x - C[j].x, dy = C[i2].y - C[j].y, r2 = dx * dx + dy * dy;
+        A[i2][j] = r2 > 1e-12 ? 0.5 * r2 * Math.log(r2) : 0;
+      }
+      A[i2][i2] += lambda;                 // 平滑化。大きいほど滑らかになる
+      A[i2][n] = 1; A[i2][n + 1] = C[i2].x; A[i2][n + 2] = C[i2].y;
+      A[n][i2] = 1; A[n + 1][i2] = C[i2].x; A[n + 2][i2] = C[i2].y;
+      b[i2] = C[i2].v;
+    }
+    var w = solve(A, b, m);
+    for (var k = 0; k < m; k++) if (!isFinite(w[k])) return null;
+    return { C: C, w: w };
+  }
+
+  function evalRBF(md, x, y) {
+    var C = md.C, w = md.w, n = C.length;
+    var s = w[n] + w[n + 1] * x + w[n + 2] * y;
+    for (var i = 0; i < n; i++) {
+      var dx = x - C[i].x, dy = y - C[i].y, r2 = dx * dx + dy * dy;
+      if (r2 > 1e-12) s += w[i] * 0.5 * r2 * Math.log(r2);
+    }
+    return s;
+  }
+
+
+  /* RBF に外れ値除去を入れたもの。
+     多項式側には最初から入っていたが RBF 側に入れ忘れており、
+     天の川を背景として吸い込んでいた。モデルの柔軟性ではなく
+     「明るい構造をサンプルから外すかどうか」が効いていた。 */
+  function fitRBFRobust(pts, lambda, maxCenters, rejectSigma, iters) {
+    var N = pts.length;
+    if (N < 12) return null;
+    var use = new Uint8Array(N); use.fill(1);
+    var md = null;
+    for (var it = 0; it <= iters; it++) {
+      var kept = [];
+      for (var k = 0; k < N; k++) if (use[k]) kept.push(pts[k]);
+      if (kept.length < 12) break;
+      var cand = fitRBF(kept, lambda, maxCenters);
+      if (!cand) break;
+      md = cand;
+      if (it === iters) break;
+      var sum = 0, res = new Float64Array(N);
+      for (var p = 0; p < N; p++) {
+        res[p] = pts[p].v - evalRBF(md, pts[p].x, pts[p].y);
+        sum += res[p] * res[p];
+      }
+      var sd = Math.sqrt(sum / N) || 1e-12, changed = 0;
+      for (var q = 0; q < N; q++) {
+        var keep = (res[q] < rejectSigma * sd && res[q] > -4 * sd) ? 1 : 0;
+        if (keep !== use[q]) changed++;
+        use[q] = keep;
+      }
+      if (!changed) break;
+    }
+    return md;
+  }
+
+  /* 背景は滑らかなので、粗い格子で評価して線形補間すれば足りる。
+     全画素で RBF を評価すると中心点の数だけ掛かって実用速度が出ない。 */
+  function rbfToMap(md, GM) {
+    var map = new Float32Array(GM * GM);
+    for (var gy = 0; gy < GM; gy++) {
+      var ny = gy / (GM - 1) * 2 - 1;
+      for (var gx = 0; gx < GM; gx++) map[gy * GM + gx] = evalRBF(md, gx / (GM - 1) * 2 - 1, ny);
+    }
+    return map;
+  }
+
+  function sampleMap(map, GM, nx, ny) {
+    var fx = (nx + 1) / 2 * (GM - 1), fy = (ny + 1) / 2 * (GM - 1);
+    if (fx < 0) fx = 0; else if (fx > GM - 1) fx = GM - 1;
+    if (fy < 0) fy = 0; else if (fy > GM - 1) fy = GM - 1;
+    var ix = fx | 0, iy = fy | 0, tx = fx - ix, ty = fy - iy;
+    var ix1 = ix + 1 < GM ? ix + 1 : ix, iy1 = iy + 1 < GM ? iy + 1 : iy;
+    var a = map[iy * GM + ix], b2 = map[iy * GM + ix1];
+    var c = map[iy1 * GM + ix], d = map[iy1 * GM + ix1];
+    return (a + (b2 - a) * tx) * (1 - ty) + (c + (d - c) * tx) * ty;
+  }
+
 
   /* 地上(前景)と空を分ける。
      地上の見分け方は「星が無く、空より極端に暗いか明るい」。
@@ -504,6 +614,35 @@
     }
     M.coefs = coefs; M.deg = deg; M.bgMean = bgMean; M.bgLo = bgLo; M.bgHi = bgHi;
 
+    /* RBF を使う場合は、多項式の代わりに背景マップを作る。
+       係数は使わず、粗い格子に評価した値を線形補間して使う。 */
+    M.bgMap = null;
+    if (P.bgModel === 1) {
+      var GM = 64, maps = [], okRBF = true;
+      for (var cm = 0; cm < 3; cm++) {
+        var md = fitRBFRobust(ptsC[cm], P.rbfSmooth, P.rbfCenters, P.rejectSigma, P.rejectIters);
+        if (!md) { okRBF = false; break; }
+        maps.push(rbfToMap(md, GM));
+      }
+      if (okRBF) {
+        M.bgMap = maps; M.GM = GM;
+        // 観測した空のセルでの値域と平均を取り直す(外挿を抑えるため)
+        for (var cn = 0; cn < 3; cn++) {
+          var sum3 = 0, lo3 = Infinity, hi3 = -Infinity;
+          for (var pp = 0; pp < ptsC[cn].length; pp++) {
+            var vv3 = sampleMap(maps[cn], GM, ptsC[cn][pp].x, ptsC[cn][pp].y);
+            sum3 += vv3;
+            if (vv3 < lo3) lo3 = vv3;
+            if (vv3 > hi3) hi3 = vv3;
+          }
+          bgMean[cn] = sum3 / Math.max(1, ptsC[cn].length);
+          bgLo[cn] = isFinite(lo3) ? lo3 : 0;
+          bgHi[cn] = isFinite(hi3) ? hi3 : 0;
+        }
+      }
+    }
+
+
     /* --- 色を測れているかの信頼度 ---
        背景が黒潰れの底に貼り付いていると、引き算の結果が 0 で片側だけ
        切り捨てられ、チャンネル間に嘘の差が生まれる (IMG_0325 で色かぶりが
@@ -588,9 +727,11 @@
       if (tny !== lastNy) { foldRow(coefs, deg, tny, bA, bB, bC, bD); lastNy = tny; }
       var tn2 = tnx * tnx, tn3 = tn2 * tnx;
       for (var bc = 0; bc < 3; bc++) {
-        var bv = (bc === 0 ? bA[0] + bB[0] * tnx + bC[0] * tn2 + bD[0] * tn3
-               : bc === 1 ? bA[1] + bB[1] * tnx + bC[1] * tn2 + bD[1] * tn3
-                          : bA[2] + bB[2] * tnx + bC[2] * tn2 + bD[2] * tn3);
+        var bv = M.bgMap
+          ? sampleMap(M.bgMap[bc], M.GM, tnx, tny)
+          : (bc === 0 ? bA[0] + bB[0] * tnx + bC[0] * tn2 + bD[0] * tn3
+           : bc === 1 ? bA[1] + bB[1] * tnx + bC[1] * tn2 + bD[1] * tn3
+                      : bA[2] + bB[2] * tnx + bC[2] * tn2 + bD[2] * tn3);
         if (bv < bgLo[bc]) bv = bgLo[bc]; else if (bv > bgHi[bc]) bv = bgHi[bc];
         sBg[t1 * 3 + bc] = bv;
       }
@@ -745,6 +886,18 @@
     /* --- 全画素を1回だけ通す --- */
     var lin = M.lin, w2 = M.work;
     // x方向の座標と冪は全行で共通。行ごとに作り直すのは無駄だった。
+    var BM = M.bgMap, GM2 = M.GM || 0;
+    // マップの格子位置は全行で共通なので先に出しておく
+    var MIX = null, MIX1 = null, MTX = null;
+    if (BM) {
+      MIX = new Int32Array(width); MIX1 = new Int32Array(width); MTX = new Float64Array(width);
+      for (var mxi = 0; mxi < width; mxi++) {
+        var fxm = (mxi + 0.5) / width * (GM2 - 1);
+        if (fxm < 0) fxm = 0; else if (fxm > GM2 - 1) fxm = GM2 - 1;
+        var ixm = fxm | 0;
+        MIX[mxi] = ixm; MIX1[mxi] = ixm + 1 < GM2 ? ixm + 1 : ixm; MTX[mxi] = fxm - ixm;
+      }
+    }
     var NX = new Float64Array(width), NX2 = new Float64Array(width), NX3 = new Float64Array(width);
     for (var xi = 0; xi < width; xi++) {
       var v = (xi + 0.5) / width * 2 - 1;
@@ -760,6 +913,14 @@
     for (var yy = 0; yy < height; yy++) {
       var nyr = (yy + 0.5) / height * 2 - 1;
       foldRow(coefs, deg, nyr, rA, rB, rC2, rD);
+      var rowA0 = 0, rowB0 = 0, mty = 0, omty = 1;
+      if (BM) {
+        var fym = (yy + 0.5) / height * (GM2 - 1);
+        if (fym < 0) fym = 0; else if (fym > GM2 - 1) fym = GM2 - 1;
+        var iym = fym | 0;
+        mty = fym - iym; omty = 1 - mty;
+        rowA0 = iym * GM2; rowB0 = (iym + 1 < GM2 ? iym + 1 : iym) * GM2;
+      }
       var nyr2 = nyr * nyr;
       var A0 = rA[0], B0 = rB[0], C0 = rC2[0], D0 = rD[0];
       var A1 = rA[1], B1 = rB[1], C1 = rC2[1], D1 = rD[1];
@@ -771,9 +932,23 @@
         var base = rowBase + xx * 3;
         // 空で観測した範囲にモデルを閉じ込める。地上側は外挿になるので、
         // そのまま引くと引きすぎて真っ黒に潰れる。
-        var q0 = A0 + B0 * nxr + C0 * nxr2 + D0 * nxr3;
-        var q1 = A1 + B1 * nxr + C1 * nxr2 + D1 * nxr3;
-        var q2c = A2 + B2 * nxr + C2 * nxr2 + D2 * nxr3;
+        var q0, q1, q2c;
+        if (BM) {
+          var mix = MIX[xx], mix1 = MIX1[xx], mtx = MTX[xx];
+          var r0a = BM[0][rowA0 + mix], r0b = BM[0][rowA0 + mix1];
+          var r0c = BM[0][rowB0 + mix], r0d = BM[0][rowB0 + mix1];
+          q0 = (r0a + (r0b - r0a) * mtx) * omty + (r0c + (r0d - r0c) * mtx) * mty;
+          var r1a = BM[1][rowA0 + mix], r1b = BM[1][rowA0 + mix1];
+          var r1c = BM[1][rowB0 + mix], r1d = BM[1][rowB0 + mix1];
+          q1 = (r1a + (r1b - r1a) * mtx) * omty + (r1c + (r1d - r1c) * mtx) * mty;
+          var r2a = BM[2][rowA0 + mix], r2b = BM[2][rowA0 + mix1];
+          var r2c2 = BM[2][rowB0 + mix], r2d = BM[2][rowB0 + mix1];
+          q2c = (r2a + (r2b - r2a) * mtx) * omty + (r2c2 + (r2d - r2c2) * mtx) * mty;
+        } else {
+          q0 = A0 + B0 * nxr + C0 * nxr2 + D0 * nxr3;
+          q1 = A1 + B1 * nxr + C1 * nxr2 + D1 * nxr3;
+          q2c = A2 + B2 * nxr + C2 * nxr2 + D2 * nxr3;
+        }
         if (q0 < L0) q0 = L0; else if (q0 > H0) q0 = H0;
         if (q1 < L1) q1 = L1; else if (q1 > H1) q1 = H1;
         if (q2c < L2) q2c = L2; else if (q2c > H2) q2c = H2;

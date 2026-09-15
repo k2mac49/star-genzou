@@ -466,9 +466,9 @@
     if (/front/i.test(lens)) return { cls: 'bad', msg: 'インカメラで撮影されています。星空の写真ではない可能性が高いです。' };
     if (t != null && t < 0.5) return { cls: 'bad', msg: '露出 ' + sec(t) + ' は星を写すには短すぎます。' };
     if (info && info.noData) return { cls: 'bad', msg: '画面の大半が黒つぶれしており、復元できる情報がありません。' };
-    if (t != null && t < 2) return { cls: 'mid', msg: '露出 ' + sec(t) + '。短いので引き出せる階調が限られます（10秒前後だと安定します）。' };
+    if (t != null && t < 5) return { cls: 'mid', msg: '露出 ' + sec(t) + '。このツールは10秒前後の露出を想定しています。1秒前後だと空の信号がノイズの2倍程度しかなく、補正しきれないことがあります（実測で15枚中6枚が悪化）。' };
     if (exif.ISO && exif.ISO >= 10000) return { cls: 'mid', msg: 'ISO ' + exif.ISO + ' と高感度です。ノイズが多く補正の効きが鈍くなります。' };
-    return { cls: 'good', msg: '星空の写真として処理できる条件です。' };
+    return { cls: 'good', msg: '星空の写真として処理できる条件です（露出 ' + sec(t) + '）。' };
   }
   function putCache(name, img) {
     decCache[name] = img;
