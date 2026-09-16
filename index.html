@@ -742,54 +742,111 @@
   }
 
   /* ドロップされたものがフォルダなら中を読む */
+  /* ドロップされたフォルダの中身を読む。
+     読み方が環境によって失敗するので、独立した3方式を順に試す:
+       1. webkitGetAsEntry   (昔からある方式)
+       2. getAsFileSystemHandle (新しい File System Access API)
+       3. dataTransfer.files (フォルダの中身は取れないがファイル単体なら取れる)
+     index.html をダブルクリックで開いた file:// のページでは 1 が
+     失敗することがあり、以前はそのエラーを握りつぶして
+     「画像がありません」になっていた。失敗理由は必ず記録して表示する。 */
   function filesFromDrop(dt) {
-    var items = dt.items, entries = [];
-    // entry はハンドラを抜けると無効になるので、ここで同期的に取り出す
-    if (items && items.length) {
-      for (var i = 0; i < items.length; i++) {
-        var get = items[i].webkitGetAsEntry || items[i].getAsEntry;
-        if (!get) continue;
-        try { var en = get.call(items[i]); if (en) entries.push(en); } catch (err) { }
-      }
-    }
+    var errors = [];
+    var items = dt.items ? Array.prototype.slice.call(dt.items) : [];
     var plain = Array.prototype.slice.call(dt.files || []);
-    if (!entries.length) return Promise.resolve(plain);
-    return Promise.all(entries.map(function (x) { return readEntry(x, ''); }))
-      .then(function (a) {
-        var all = a.reduce(function (x, y) { return x.concat(y); }, []);
-        /* フォルダとして読めなかった場合に黙って終わらないよう、
-           通常のファイル一覧に落とす */
-        return all.length ? all : plain;
-      })
-      .catch(function () { return plain; });
+
+    // どちらもイベント処理中に同期で取り出さないと無効になる
+    var entries = [], handles = [];
+    items.forEach(function (it) {
+      if (it.kind && it.kind !== "file") return;
+      var get = it.webkitGetAsEntry || it.getAsEntry;
+      if (get) {
+        try { var en = get.call(it); if (en) entries.push(en); }
+        catch (e) { errors.push("entry: " + (e.name || e)); }
+      }
+      if (it.getAsFileSystemHandle) {
+        try { handles.push(it.getAsFileSystemHandle()); }
+        catch (e2) { errors.push("handle: " + (e2.name || e2)); }
+      }
+    });
+
+    var flat = function (a) { return a.reduce(function (x, y) { return x.concat(y); }, []); };
+    var isImg = function (list) { return list.some(function (f) { return IMG_RE.test(f.name); }); };
+
+    var viaEntries = entries.length
+      ? Promise.all(entries.map(function (x) { return readEntry(x, "", errors); })).then(flat)
+      : Promise.resolve([]);
+
+    return viaEntries.then(function (list) {
+      if (isImg(list)) return list;
+      if (!handles.length) return list;
+      return Promise.all(handles.map(function (hp) {
+        return Promise.resolve(hp).then(function (h) { return h ? walkHandle(h, "", errors) : []; },
+          function (e) { errors.push("handle: " + (e && e.name || e)); return []; });
+      })).then(flat);
+    }).then(function (list) {
+      if (isImg(list)) return list;
+      return plain;
+    }).then(function (list) {
+      list._errors = errors;
+      return list;
+    }, function (e) {
+      errors.push("drop: " + (e && e.name || e));
+      plain._errors = errors;
+      return plain;
+    });
   }
-  function readEntry(en, prefix) {
-    prefix = prefix || '';
+
+  /* File System Access API でフォルダを辿る */
+  function walkHandle(h, prefix, errors) {
+    if (h.kind === "file") {
+      return h.getFile().then(function (f) { f._dir = prefix; return [f]; },
+        function (e) { errors.push("getFile: " + (e && e.name || e)); return []; });
+    }
+    if (h.kind !== "directory" || !h.values) return Promise.resolve([]);
+    var sub = prefix ? prefix + "/" + h.name : h.name;
+    var it = h.values(), kids = [];
+    return new Promise(function (res) {
+      (function step() {
+        it.next().then(function (x) {
+          if (x.done || kids.length >= 5000) {
+            Promise.all(kids.map(function (c) { return walkHandle(c, sub, errors); }))
+              .then(function (a) { res(a.reduce(function (p, q) { return p.concat(q); }, [])); });
+            return;
+          }
+          kids.push(x.value);
+          step();
+        }, function (e) { errors.push("values: " + (e && e.name || e)); res([]); });
+      })();
+    });
+  }
+  function readEntry(en, prefix, errors) {
+    prefix = prefix || "";
+    errors = errors || [];
+    var why = function (tag) {
+      return function (e) { errors.push(tag + ": " + (e && (e.name + " " + (e.message || "")) || e)); };
+    };
     if (en.isFile) return new Promise(function (r) {
-      en.file(function (f) { f._dir = prefix; r([f]); }, function () { r([]); });
+      en.file(function (f) { f._dir = prefix; r([f]); },
+        function (e) { why("file")(e); r([]); });
     });
     if (!en.isDirectory) return Promise.resolve([]);
-    var sub = prefix ? prefix + '/' + en.name : en.name;
+    var sub = prefix ? prefix + "/" + en.name : en.name;
     var rd;
-    try { rd = en.createReader(); } catch (err) { return Promise.resolve([]); }
+    try { rd = en.createReader(); } catch (e0) { why("createReader")(e0); return Promise.resolve([]); }
     var all = [];
     return new Promise(function (res) {
       (function more() {
         rd.readEntries(function (ents) {
-          if (!ents.length) {
-            Promise.all(all.map(function (x) { return readEntry(x, sub); })).then(function (a) {
+          if (!ents.length || all.length >= 5000) {
+            Promise.all(all.map(function (x) { return readEntry(x, sub, errors); })).then(function (a) {
               res(a.reduce(function (x, y) { return x.concat(y); }, []));
             });
             return;
           }
           all = all.concat(Array.prototype.slice.call(ents));
-          if (all.length > 5000) {                 // 巨大なフォルダで固まらせない
-            Promise.all(all.slice(0, 5000).map(function (x) { return readEntry(x, sub); }))
-              .then(function (a) { res(a.reduce(function (x, y) { return x.concat(y); }, [])); });
-            return;
-          }
           more();
-        }, function () { res([]); });
+        }, function (e) { why("readEntries")(e); res([]); });
       })();
     });
   }
@@ -1490,9 +1547,12 @@
     busy(true, 'フォルダを読み込み中…');
     filesFromDrop(e.dataTransfer).then(function (files) {
       busy(false);
-      if (!files.length) {
-        alert('ドロップされたものから画像が見つかりませんでした。\n' +
-              'フォルダの場合は中に HEIC / JPEG / PNG が入っているか確認してください。');
+      if (!files.some(function (f) { return IMG_RE.test(f.name); })) {
+        var er = (files._errors || []).slice(0, 6);
+        alert('ドロップされたものから画像を読み込めませんでした。\n\n' +
+              (er.length ? '理由: ' + er.join(' / ') + '\n\n' : '') +
+              '左上の「開く」または「フォルダ」ボタンから同じフォルダを選ぶと読み込めます。\n' +
+              '（index.html をダブルクリックで開いていると、ブラウザの制約でドロップが失敗することがあります）');
         return;
       }
       setList(files);
